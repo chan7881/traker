@@ -196,16 +196,24 @@ captureFrameBtn.addEventListener('click', ()=>{
 
 // Extract frames: sample video at fpsInput value and store canvases
 async function extractFrames(){
-  if(!video || !video.duration) { alert('먼저 영상(카메라 또는 업로드)을 준비하세요.'); return; }
+  if(!video){ alert('비디오 요소가 준비되지 않았습니다.'); return; }
+  // ensure metadata/duration is available
+  if(!video.duration || isNaN(video.duration) || video.duration===0){
+    await new Promise(res=>{ video.addEventListener('loadedmetadata', ()=>res(), {once:true}); });
+  }
+  if(!video.duration || isNaN(video.duration) || video.duration===0){ alert('비디오 정보를 불러오지 못했습니다. 다른 파일을 시도하세요.'); return; }
   extractedFrames = [];
   const fps = Number(fpsInput.value) || 10;
   const duration = video.duration;
   const total = Math.max(1, Math.floor(duration * fps));
   if(extractProgress) extractProgress.style.display = '';
+  if(progressBar) progressBar.style.width = '0%';
+  if(progressText) progressText.textContent = `프레임 추출: 0 / ${total}`;
+  if(extractFramesBtn) extractFramesBtn.disabled = true;
   for(let i=0;i<total;i++){
     const t = i / fps;
-    progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
-    progressBar.style.width = `${Math.round(((i+1)/total)*100)}%`;
+    if(progressText) progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
+    if(progressBar) progressBar.style.width = `${Math.round(((i+1)/total)*100)}%`;
     await seekToTime(t);
     const c = captureFrameImage();
     // store a copy canvas
@@ -222,6 +230,7 @@ async function extractFrames(){
   currentFrameIndex = 0; showFrame(0);
   if(stepROIBtn) stepROIBtn.disabled = false;
   if(stepExtractBtn) stepExtractBtn.disabled = true;
+  if(extractFramesBtn) extractFramesBtn.disabled = false;
 }
 
 if(stepExtractBtn){ stepExtractBtn.addEventListener('click', ()=>{ extractFrames(); }); }
@@ -272,17 +281,25 @@ function showFrame(idx){
   if(!extractedFrames || !extractedFrames.length) return;
   currentFrameIndex = Math.max(0, Math.min(idx, extractedFrames.length-1));
   const c = extractedFrames[currentFrameIndex];
-  // draw frame into video area (use overlay's parent video-wrap)
-  // We'll draw into the overlay's canvas sized to match display
-  overlay.width = c.width * (video.clientWidth / video.videoWidth || 1);
-  overlay.height = c.height * (video.clientHeight / video.videoHeight || 1);
+  // draw frame into overlay sized to the visible video area
+  const displayW = video.clientWidth || overlay.clientWidth || 640;
+  const displayH = video.clientHeight || overlay.clientHeight || 360;
+  overlay.width = displayW;
+  overlay.height = displayH;
   const drawCtx = overlay.getContext('2d');
   drawCtx.clearRect(0,0,overlay.width,overlay.height);
   // scale image to overlay size
-  drawCtx.drawImage(c, 0,0, overlay.width, overlay.height);
+  drawCtx.drawImage(c, 0,0, c.width, c.height, 0,0, overlay.width, overlay.height);
   // if ROI exists for this frame, draw it
   const roiObj = frameROIs[currentFrameIndex];
-  if(roiObj){ drawCtx.strokeStyle='#00ff88'; drawCtx.lineWidth=2; drawCtx.strokeRect(roiObj.x, roiObj.y, roiObj.w, roiObj.h); }
+  if(roiObj){
+    // scale stored ROI (stored in original canvas coords) to overlay display
+    const sx = roiObj.x * (overlay.width / c.width);
+    const sy = roiObj.y * (overlay.height / c.height);
+    const sw = roiObj.w * (overlay.width / c.width);
+    const sh = roiObj.h * (overlay.height / c.height);
+    drawCtx.strokeStyle='#00ff88'; drawCtx.lineWidth=2; drawCtx.strokeRect(sx, sy, sw, sh);
+  }
   // update index label
   if(frameIdxEl) frameIdxEl.textContent = `Frame ${currentFrameIndex+1} / ${extractedFrames.length}`;
 }
