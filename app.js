@@ -506,9 +506,12 @@ function showFrame(idx){
   drawCtx.clearRect(0,0,overlay.width,overlay.height);
   drawCtx.setTransform(dpr,0,0,dpr,0,0);
 
+  // Determine the source canvas CSS dimensions (captureFrameImage sets _cssWidth/_cssHeight)
+  const srcCssW = c._cssWidth || Math.round((c.width || displayW) / dpr);
+  const srcCssH = c._cssHeight || Math.round((c.height || displayH) / dpr);
   // scale image to overlay CSS size (context is already scaled by DPR)
-  const scaleX = displayW / (c.width || displayW);
-  const scaleY = displayH / (c.height || displayH);
+  const scaleX = displayW / (srcCssW || displayW);
+  const scaleY = displayH / (srcCssH || displayH);
   drawCtx.imageSmoothingEnabled = true;
   try{
     drawCtx.drawImage(c, 0,0, c.width, c.height, 0,0, displayW, displayH);
@@ -778,8 +781,10 @@ if(inspectModelBtn){
       const det = detectionsPerFrame[idx];
       if(det && det.box){
         const [x1,y1,x2,y2] = det.box;
-        const scaleX = displayW / (c.width || displayW);
-        const scaleY = displayH / (c.height || displayH);
+        const srcCssW = c._cssWidth || Math.round((c.width || displayW) / dpr);
+        const srcCssH = c._cssHeight || Math.round((c.height || displayH) / dpr);
+        const scaleX = displayW / (srcCssW || displayW);
+        const scaleY = displayH / (srcCssH || displayH);
         const sx = x1 * scaleX, sy = y1 * scaleY, sw = (x2-x1) * scaleX, sh = (y2-y1) * scaleY;
         drawCtx.strokeStyle='#ff0066'; drawCtx.lineWidth=3; drawCtx.strokeRect(sx,sy,sw,sh);
       }
@@ -877,16 +882,28 @@ function captureFrameImage(videoEl){
   const src = videoEl || video;
   const tmp = document.createElement('canvas');
   // some browsers/devices can report video.videoWidth==0 intermittently; fall back to client sizes
-  const vw = (src && src.videoWidth) || Math.max(320, (src && src.clientWidth) || 320);
-  const vh = (src && src.videoHeight) || Math.max(240, (src && src.clientHeight) || 240);
-  tmp.width = vw; tmp.height = vh;
+  const cssW = (src && src.videoWidth) || Math.max(320, (src && src.clientWidth) || 320);
+  const cssH = (src && src.videoHeight) || Math.max(240, (src && src.clientHeight) || 240);
+  const dpr = window.devicePixelRatio || 1;
+  // internal pixel size scaled by DPR for sharpness; CSS size stored for coordinate math
+  tmp.width = Math.max(1, Math.round(cssW * dpr));
+  tmp.height = Math.max(1, Math.round(cssH * dpr));
+  try{ tmp.style.width = cssW + 'px'; tmp.style.height = cssH + 'px'; }catch(e){}
+  // attach metadata so consumers can compute CSS-based scales
+  tmp._cssWidth = cssW; tmp._cssHeight = cssH; tmp._dpr = dpr;
   const tctx = tmp.getContext('2d');
   try{
-    tctx.drawImage(src, 0,0, tmp.width, tmp.height);
+    // scale ctx so drawing coordinates are in CSS pixels
+    try{ tctx.setTransform(dpr,0,0,dpr,0,0); }catch(e){}
+    // draw using CSS pixel dimensions so source scaling is explicit
+    tctx.drawImage(src, 0,0, cssW, cssH);
   }catch(err){
     console.warn('captureFrameImage drawImage failed, returning blank canvas', err, 'videoEl readyState=', src && src.readyState, 'videoWidth=', src && src.videoWidth, 'clientWidth=', src && src.clientWidth);
+    // ensure fill uses internal pixels
+    try{ tctx.setTransform(1,0,0,1,0,0); }catch(e){}
     tctx.fillStyle = 'rgb(100,100,100)'; tctx.fillRect(0,0,tmp.width,tmp.height);
   }
+  console.log('captureFrameImage created canvas', tmp.width, 'x', tmp.height, 'css', cssW, 'x', cssH, 'dpr', dpr);
   return tmp;
 }
 
