@@ -68,9 +68,48 @@ function switchTab(n){
     if(b) b.classList.toggle('active', i===n);
     const c = tabContents[i]; if(c) c.style.display = (i===n) ? '' : 'none';
   });
+  try{ onTabShown(n); }catch(e){}
 }
 // default to tab 1
 switchTab(1);
+
+// When tab 2 becomes visible, ensure extract button is enabled when a video source exists
+function onTabShown(n){
+  if(n===2){
+    // enable the extract button if a video is loaded or a blob URL is present
+    try{
+      const hasVideo = !!(video && (video.src || video.srcObject));
+      if(extractFramesBtn) extractFramesBtn.disabled = !hasVideo;
+    }catch(e){ console.warn('onTabShown error', e); }
+  }
+}
+
+// Robust binding for extract button: attach click/pointerdown/touchstart and guard against missing element
+function startExtractionIfReady(e){
+  if(e && e.preventDefault) e.preventDefault();
+  if(!extractFramesBtn) return;
+  if(extractFramesBtn.disabled){ console.warn('extractFramesBtn is disabled'); return; }
+  // run extraction (wrapped) and ensure tab 2 is visible
+  switchTab(2);
+  // Use a microtask to let tab render then start
+  Promise.resolve().then(()=>{ extractFrames(); });
+}
+
+function bindExtractButton(){
+  if(!extractFramesBtn) return;
+  // remove previous handlers to avoid duplicates
+  extractFramesBtn.removeEventListener('click', startExtractionIfReady);
+  extractFramesBtn.removeEventListener('pointerdown', startExtractionIfReady);
+  extractFramesBtn.removeEventListener('touchstart', startExtractionIfReady);
+  extractFramesBtn.addEventListener('click', startExtractionIfReady);
+  extractFramesBtn.addEventListener('pointerdown', startExtractionIfReady);
+  extractFramesBtn.addEventListener('touchstart', startExtractionIfReady, {passive:false});
+  // ensure initial enabled state: enable only if video loaded
+  try{ const hasVideo = !!(video && (video.src || video.srcObject)); extractFramesBtn.disabled = !hasVideo; }catch(e){}
+}
+
+// bind now
+bindExtractButton();
 
 
 // Start with inspect button disabled until a model is found
@@ -361,15 +400,7 @@ if(frameROIBtn) frameROIBtn.addEventListener('click', ()=>{
   overlay.addEventListener('pointerup', saveListener);
 });
 
-// extractFramesBtn in tab2 (start extraction)
-if(extractFramesBtn){
-  extractFramesBtn.addEventListener('click', async ()=>{
-    switchTab(2);
-    await extractFrames();
-    // after extraction, enable ROI tab
-    if(stepROIBtn) stepROIBtn.disabled = false;
-  });
-}
+// extractFramesBtn binding is handled by bindExtractButton() above which supports click/pointer/touch events
 
 // complete ROIs button triggers analysis (stepAnalyzeBtn handler)
 if(completeROIsBtn){
