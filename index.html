@@ -19,10 +19,7 @@
           영상 업로드
           <input id="videoFile" type="file" accept="video/*" />
         </label>
-        <label class="file-btn">
-          모델 업로드
-          <input id="modelFile" type="file" accept=".onnx" />
-        </label>
+        <!-- 모델 업로드: 기본적으로 프로젝트 루트의 `yolov8n.onnx`를 사용합니다. 필요하면 app.js의 modelPath를 변경하세요. -->
         <button id="inspectModel">모델 검사</button>
         <button id="startCamera">카메라 촬영</button>
         <button id="recordToggle" disabled style="display:none">녹화 시작</button>
@@ -58,7 +55,7 @@
     </section>
 
     <footer>
-      <small>모델 파일은 <code>model/yolov8n.onnx</code> 위치에 두세요. 로컬에서 실행할 때는 간단한 HTTP 서버로 제공해야 합니다.</small>
+      <small>모델 파일은 프로젝트 루트에 있는 <code>yolov8n.onnx</code>를 사용합니다. 로컬에서 실행할 때는 간단한 HTTP 서버로 제공하세요 (예: <code>python -m http.server</code>).</small>
     </footer>
   </main>
 

@@ -21,7 +21,9 @@ const scaleInput = document.getElementById('scaleInput');
 
 let modelSession = null;
 let modelLoaded = false;
-let modelPath = 'model/yolov8n.onnx'; // 사용자 제공
+// Use the local ONNX file bundled in the project root by default.
+// If you prefer a different location, change this path (e.g. './model/yolov8n.onnx').
+let modelPath = './yolov8n.onnx'; // default to local file in project root
 let currentStream = null;
 let mediaRecorder = null;
 let recordedChunks = [];

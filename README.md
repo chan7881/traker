@@ -4,7 +4,7 @@
 
 - 비디오 업로드, 카메라 실시간 촬영
 - 화면 터치/드래그로 ROI 선택
-- YOLO(ONNX) 모델 연동(선택) — `model/yolov8n.onnx` 위치에 모델 파일을 놓아 사용
+ - YOLO(ONNX) 모델 연동(선택) — 프로젝트 루트의 `yolov8n.onnx` 파일을 사용하도록 기본 설정되어 있습니다
 - 프레임별 좌표 추출, 속도/가속도 계산, 궤적 시각화
 - 결과 CSV 내보내기
 
@@ -15,7 +15,7 @@
 빠른 시작
 
 1. 모델 파일 준비 (선택)
-   - `model/yolov8n.onnx` 파일을 프로젝트의 `model/` 폴더에 넣습니다.
+   - 기본 설정은 프로젝트 루트에 `yolov8n.onnx` 파일을 두는 것입니다. 다른 위치에 두려면 `app.js`에서 `modelPath`를 수정하세요.
    - 모델은 NMS 비활성화 형식(출력 [1,N,85])로 내보낸 YOLOv8 ONNX를 가정합니다.
 
 2. 간단한 HTTP 서버로 제공
@@ -50,8 +50,7 @@
       - index.html
       - styles.css
       - app.js
-      - model/
-         - yolov8n.onnx
+      - yolov8n.onnx  <-- 모델 파일 (프로젝트 루트)
       - README.md
 
    GitHub Pages로 배포하려면 이 전체 `Traker/` 폴더를 레포지토리의 `docs/` 폴더로 옮기거나(간단) 레포지토리 루트에 둔 다음 Pages 설정에서 `gh-pages` 브랜치나 `docs/`를 소스로 지정하세요.
@@ -65,7 +64,7 @@
 - 모델 파일 관련 주의사항
    - 모델 파일(`yolov8n.onnx`)은 리포지토리에서 정적 파일로 제공되므로 CORS 문제 없이 브라우저에서 직접 fetch로 로드할 수 있습니다.
    - 파일 크기가 커서(>100MB) GitHub 저장소 한 파일 제한을 초과하면 Git LFS 사용 또는 외부 스토리지(예: S3)를 고려하세요.
-   - 모델을 바꾸면 동일한 경로(`model/yolov8n.onnx`)에 덮어쓰기 하거나 `modelPath` 값을 앱에서 조정하세요.
+   - 모델을 바꾸려면 프로젝트 루트의 `yolov8n.onnx`를 교체하거나 `app.js`의 `modelPath` 값을 조정하세요.
 
 - 성능/보안 팁
    - GitHub Pages는 HTTPS이므로 onnxruntime-web WebGL/WASM을 안전하게 사용 가능합니다.
