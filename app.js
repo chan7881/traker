@@ -1,486 +1,232 @@
-// Motion Tracker main app.js
-// 주요기능: 비디오 업로드/카메라, ROI 선택, ONNX(YOLO) 모델 로드(선택), 프레임별 검출 및 궤적/속도 분석, CSV 내보내기
+// Motion Tracker main app.js - 안정화 버전
+/*
+  Motion Tracker — 안정화된 최소 동작 버전
+  목표:
+   - 파일 업로드 후 비디오가 화면에 보이도록 보장
+   - 프레임 추출(seek 기반)을 안정적으로 수행
+   - 추출된 프레임을 overlay/preview에 표시
+  이 파일은 복잡한 분석(YOLO 등)을 보조하는 기존 코드에서 업로드/추출/표시 경로를 단순화하여
+  문제를 해결하는 데 집중합니다.
+*/
 
-const video = document.getElementById('video');
-const overlay = document.getElementById('overlay');
-const ctx = overlay.getContext('2d');
+const $ = id => document.getElementById(id);
+const video = $('video');
+const overlay = $('overlay');
+const framePreview = $('framePreview');
 
-const videoFile = document.getElementById('videoFile');
-const stepCameraBtn = document.getElementById('stepCamera');
-const stepExtractBtn = document.getElementById('stepExtract');
-const stepROIBtn = document.getElementById('stepROI');
-const stepAnalyzeBtn = document.getElementById('stepAnalyze');
-const extractProgress = document.getElementById('extractProgress');
-const progressBar = document.getElementById('progressBar');
-const progressText = document.getElementById('progressText');
-const prevFrameBtn = document.getElementById('prevFrame');
-const nextFrameBtn = document.getElementById('nextFrame');
-const frameIdxEl = document.getElementById('frameIdx');
-const frameROIBtn = document.getElementById('frameROI');
-const tabContents = {
-  1: document.getElementById('tab-1'),
-  2: document.getElementById('tab-2'),
-  3: document.getElementById('tab-3'),
-  4: document.getElementById('tab-4')
-};
-const startCameraBtn = document.getElementById('startCamera');
-const recordToggleBtn = document.getElementById('recordToggle');
-const captureFrameBtn = document.getElementById('captureFrame');
-const extractFramesBtn = document.getElementById('extractFramesBtn');
-const completeROIsBtn = document.getElementById('completeROIs');
-const playResultsBtn = document.getElementById('playResultsBtn');
-const selectROIBtn = document.getElementById('selectROI');
-const runDetectBtn = document.getElementById('runDetect');
-const exportCSVBtn = document.getElementById('exportCSV');
-const modelFileInput = document.getElementById('modelFile');
-const inspectModelBtn = document.getElementById('inspectModel');
+// Controls
+const videoFile = $('videoFile');
+const startCameraBtn = $('startCamera');
+const recordToggleBtn = $('recordToggle');
+const extractFramesBtn = $('extractFramesBtn');
+const prevFrameBtn = $('prevFrame');
+const nextFrameBtn = $('nextFrame');
+const frameIdxEl = $('frameIdx');
+const extractProgress = $('extractProgress');
+const progressBar = $('progressBar');
+const progressText = $('progressText');
 
-// Note: there are duplicate ID inputs in the page (one inside tab-2 and one in the footer).
-// Use helper accessors that prefer the tab-2 inputs to avoid reading the wrong element.
-function getFpsValue(){ const el = document.querySelector('#tab-2 #fpsInput') || document.getElementById('fpsInput'); return Number(el && el.value) || 10; }
-function getConfValue(){ const el = document.querySelector('#tab-2 #confInput') || document.getElementById('confInput'); return Number(el && el.value) || 0.3; }
-function getScaleValue(){ const el = document.getElementById('scaleInput'); return parseFloat(el && el.value) || 1; }
+// Small on-screen status (for users without console access)
+function userLog(msg){
+  console.log('[Traker]', msg);
+  try{
+    let el = document.getElementById('mobileStatusLog');
+    if(!el){
+      el = document.createElement('div'); el.id = 'mobileStatusLog';
+      Object.assign(el.style, {position:'fixed',left:'8px',right:'8px',bottom:'12px',padding:'8px 10px',background:'rgba(0,0,0,0.7)',color:'#fff',fontSize:'12px',zIndex:9999,maxHeight:'140px',overflow:'auto'});
+      document.body.appendChild(el);
+    }
+    const p = document.createElement('div'); p.textContent = `${new Date().toLocaleTimeString()} ${msg}`;
+    el.appendChild(p);
+    while(el.childNodes.length>6) el.removeChild(el.firstChild);
+  }catch(e){}
+}
 
-let modelSession = null;
-let modelLoaded = false;
-// Use the local ONNX file bundled in the project root by default.
-// If you prefer a different location, change this path (e.g. './model/yolov8n.onnx').
-let modelPath = './yolov8n.onnx'; // default to local file in project root
+// State
 let currentStream = null;
 let mediaRecorder = null;
 let recordedChunks = [];
-
-// Frame extraction / per-frame state
-let extractedFrames = []; // array of canvas images
+let extractedFrames = []; // canvases
 let currentFrameIndex = 0;
-let frameROIs = {}; // map frameIndex -> {x,y,w,h}
 
-// Extraction guard (declare early to avoid TDZ when handlers fire quickly)
-let isExtracting = false;
+// helpers
+function safe(el, name){ if(!el) userLog(`요소 없음: ${name}`); return !!el; }
+function setProgress(p){ if(progressBar) progressBar.style.width = `${p}%`; if(progressText) progressText.textContent = `${p}%`; }
 
-// Simplify initial UI: disable steps until prerequisites
-if(stepExtractBtn) stepExtractBtn.disabled = true;
-if(stepROIBtn) stepROIBtn.disabled = true;
-if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = true;
-
-// Tab switching
-function switchTab(n){
-  // highlight header
-  [1,2,3,4].forEach(i=>{
-    const b = document.getElementById('step'+(i===1? 'Camera': i===2? 'Extract': i===3? 'ROI': 'Analyze'));
-    if(b) b.classList.toggle('active', i===n);
-    const c = tabContents[i]; if(c) c.style.display = (i===n) ? '' : 'none';
-  });
-  try{ onTabShown(n); }catch(e){}
-}
-// default to tab 1
-switchTab(1);
-
-// Helper: restore video view (show video + overlay, hide framePreview)
-function restoreVideoView(){
-  try{
-    const preview = document.getElementById('framePreview'); if(preview) preview.style.display = 'none';
-    if(video) video.style.display = '';
-    if(overlay) overlay.style.display = '';
-  }catch(e){ console.warn('restoreVideoView failed', e); }
-}
-
-// Ensure .video-wrap and overlay are positioned for absolute preview + canvas overlay
-try{
-  const vwWrap = document.querySelector('.video-wrap');
-  if(vwWrap) vwWrap.style.position = 'relative';
-  if(overlay){ overlay.style.position = 'absolute'; overlay.style.left = '0'; overlay.style.top = '0'; overlay.style.zIndex = '3'; }
-}catch(e){ console.warn('video-wrap/overlay init failed', e); }
-
-// Navigation & listener guards
-let lastNavTime = 0; // timestamp of last prev/next navigation
-let activeFrameSaveListener = null; // currently attached save listener for frame ROI
-
-// When tab 2 becomes visible, ensure extract button is enabled when a video source exists
-function onTabShown(n){
-  if(n===2){
-    // enable the extract button if a video is loaded or a blob URL is present
-    try{
-      const hasVideo = !!(video && (video.src || video.srcObject));
-      if(extractFramesBtn) extractFramesBtn.disabled = !hasVideo;
-    }catch(e){ console.warn('onTabShown error', e); }
-  }
-}
-
-// Robust binding for extract button: attach click/pointerdown/touchstart and guard against missing element
-function startExtractionIfReady(e){
-  if(e && e.preventDefault) e.preventDefault();
-  if(!extractFramesBtn) return;
-  // prevent double start
-  if(isExtracting){ console.warn('already extracting'); return; }
-  // if button is disabled but video looks ready, enable and continue
-  try{
-    const ready = !!(video && (video.src || video.srcObject) && (video.readyState >= 2 || (video.duration && !isNaN(video.duration) && video.duration>0)));
-    if(extractFramesBtn.disabled && ready){ extractFramesBtn.disabled = false; }
-    if(extractFramesBtn.disabled){ console.warn('extractFramesBtn is disabled'); mobileLog('버튼이 비활성화되어 시작할 수 없습니다. 비디오를 확인하세요.'); return; }
-  }catch(e){ console.warn('startExtractionIfReady check failed', e); }
-  // run extraction (wrapped) and ensure tab 2 is visible
-  switchTab(2);
-  // Mark extracting immediately to avoid duplicate triggers from multiple events
-  isExtracting = true; mobileLog('추출 시작');
-  // Start extraction in next tick so UI can render
-  Promise.resolve().then(()=>{ extractFrames().catch(err=>{ console.error('extractFrames error', err); mobileLog('추출 오류: '+(err && err.message)); }).finally(()=>{ isExtracting = false; mobileLog('추출 종료'); }); });
-}
-
-function bindExtractButton(){
-  if(!extractFramesBtn) return;
-  // remove previous handlers to avoid duplicates
-  extractFramesBtn.removeEventListener('click', startExtractionIfReady);
-  extractFramesBtn.removeEventListener('pointerdown', startExtractionIfReady);
-  extractFramesBtn.removeEventListener('touchstart', startExtractionIfReady);
-  extractFramesBtn.removeEventListener('touchend', startExtractionIfReady);
-  extractFramesBtn.addEventListener('click', startExtractionIfReady);
-  extractFramesBtn.addEventListener('pointerdown', startExtractionIfReady);
-  extractFramesBtn.addEventListener('touchstart', startExtractionIfReady, {passive:false});
-  extractFramesBtn.addEventListener('touchend', startExtractionIfReady, {passive:false});
-  // ensure initial enabled state: enable only if video loaded
-  try{ const hasVideo = !!(video && (video.src || video.srcObject)); extractFramesBtn.disabled = !hasVideo; }catch(e){}
-}
-
-// bind now
-bindExtractButton();
-
-// Global helper to safely bind handlers across click/pointer/touch and avoid duplicate firing
-function bindMulti(el, handler, cooldown=150){
-  if(!el) return;
-  try{ if(el._lastWrapper) { el.removeEventListener('click', el._lastWrapper); el.removeEventListener('pointerdown', el._lastWrapper); el.removeEventListener('touchstart', el._lastWrapper); el.removeEventListener('touchend', el._lastWrapper); } }catch(e){}
-  const wrapper = function(ev){
-    try{ if(el.__handlerLock) { return; } }catch(e){}
-    el.__handlerLock = true;
-    try{ handler(ev); }catch(err){ console.error('handler error', err); }
-    setTimeout(()=>{ try{ el.__handlerLock = false; }catch(e){} }, cooldown);
-  };
-  el._lastWrapper = wrapper;
-  el.addEventListener('click', wrapper);
-  el.addEventListener('pointerdown', wrapper);
-  el.addEventListener('touchstart', wrapper, {passive:true});
-  el.addEventListener('touchend', wrapper, {passive:true});
-}
-
-// Robustly bind other UI buttons (prev/next/frame ROI/play/export) to support click/pointer/touch across devices
-function bindAllUI(){
-  bindMulti(frameROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault();
-    // reuse existing handler logic: open selection mode for current frame
-    if(!extractedFrames || !extractedFrames.length) { mobileLog('프레임이 없습니다. 먼저 추출하세요.'); return; }
-    // prevent multiple activations
-    if(selecting) { mobileLog('이미 ROI 선택 모드입니다'); return; }
-    selecting = true; mobileLog('프레임 ROI 선택 모드로 진입');
-    alert('이 프레임에서 ROI를 드래그하여 선택하세요. 선택 후 빈 공간을 누르거나 다시 ROI 버튼을 누르세요.');
-    // if a previous save listener exists, remove it to avoid duplicates
-    try{ if(activeFrameSaveListener) { overlay.removeEventListener('pointerup', activeFrameSaveListener); activeFrameSaveListener = null; } }catch(e){}
-    const saveListener = ()=>{
-      if(roi){
-        const scaleX = extractedFrames[currentFrameIndex].width / overlay.width;
-        const scaleY = extractedFrames[currentFrameIndex].height / overlay.height;
-        frameROIs[currentFrameIndex] = {x: Math.round(roi.x*scaleX), y: Math.round(roi.y*scaleY), w: Math.round(roi.w*scaleX), h: Math.round(roi.h*scaleY)};
-        selecting = false; roi = null; showFrame(currentFrameIndex);
-        if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = false;
-        mobileLog(`ROI 저장: frame ${currentFrameIndex+1}`);
-      }
-      try{ if(activeFrameSaveListener){ overlay.removeEventListener('pointerup', activeFrameSaveListener); activeFrameSaveListener = null; } }catch(e){}
-    };
-    activeFrameSaveListener = saveListener;
-    overlay.addEventListener('pointerup', saveListener);
-  });
-
-  bindMulti(playResultsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); playResults(); switchTab(4); });
-  bindMulti(completeROIsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(4); if(stepAnalyzeBtn) stepAnalyzeBtn.click(); });
-  // exportCSVBtn already has its own handler which we wrap elsewhere
-}
-
-// call binding for other UI
-bindAllUI();
-
-
-// Start with inspect button disabled until a model is found
-if(inspectModelBtn) inspectModelBtn.disabled = true;
-
-// Immediately show model loading attempt text so user isn't left with '대기 중'
-const statusElInit = document.getElementById('status');
-if(statusElInit) statusElInit.textContent = '모델 로드 상태: 로딩 시도 중...';
-
-// Analysis data
-let detectionsPerFrame = []; // [{time, box: [x1,y1,x2,y2], score}]
-let scalePxPerUnit = getScaleValue();
-
-// ROI selection
-let selecting = false;
-let roi = null; // {x,y,w,h}
-
-// Charts
-let posChart, velChart;
-
+// Resize overlay to visible video area and handle DPR
 function resizeOverlay(){
-  overlay.width = video.clientWidth;
-  overlay.height = video.clientHeight;
+  if(!overlay || !video) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(video.clientWidth * dpr));
+  const h = Math.max(1, Math.round(video.clientHeight * dpr));
+  overlay.width = w; overlay.height = h;
+  overlay.style.width = video.clientWidth + 'px';
+  overlay.style.height = video.clientHeight + 'px';
 }
-
 window.addEventListener('resize', resizeOverlay);
-video.addEventListener('loadedmetadata', ()=>{
-  resizeOverlay();
-});
+video && video.addEventListener('loadedmetadata', ()=>{ resizeOverlay(); });
 
-videoFile.addEventListener('change', (e)=>{
-  const f = e.target.files && e.target.files[0];
-  if(!f) return;
-  const url = URL.createObjectURL(f);
-  // If a camera stream is active, stop it so we treat this as an uploaded file
-  if(currentStream){ currentStream.getTracks().forEach(t=>t.stop()); currentStream = null; }
-  if(mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
-  video.srcObject = null;
-  video.src = url;
-  video.muted = false;
-  video.play();
-  // enable extract step once video is loaded
-  video.addEventListener('loadedmetadata', ()=>{ 
-    if(stepExtractBtn) stepExtractBtn.disabled = false; 
-    // automatically switch to the Frame Extraction tab so users can proceed
-    try{ switchTab(2); }catch(e){}
-  }, {once:true});
-});
+// -------------------------
+// File upload handling
+// -------------------------
+if(videoFile){
+  videoFile.addEventListener('change', async (e)=>{
+    const f = e.target.files && e.target.files[0];
+    if(!f){ userLog('파일 선택 취소'); return; }
+    userLog(`파일 선택: ${f.name}`);
 
-// Camera flow: open preview and enable recording. Recording will create a blob video which
-// replaces the preview as a file-like source for analysis.
-startCameraBtn.addEventListener('click', async ()=>{
-  try{
-    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:true});
-    currentStream = stream;
-    video.srcObject = stream;
-    video.muted = true;
-    await video.play();
-    // enable record button and show it
-    if(recordToggleBtn){ recordToggleBtn.style.display = ''; recordToggleBtn.disabled = false; recordToggleBtn.textContent = '녹화 시작'; }
-  }catch(err){
-    alert('카메라 권한이 필요합니다: '+err.message);
-  }
-});
+    try{
+      // Stop any camera stream to avoid srcObject conflicts
+      if(currentStream){
+        try{ currentStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+        currentStream = null; video.srcObject = null;
+      }
 
-// Step camera/file: open camera or file picker
-if(stepCameraBtn){
-  stepCameraBtn.addEventListener('click', ()=>{
-    // switch to camera tab content and trigger camera/file UI
-    switchTab(1);
-    // restore video view when returning to camera tab
-    restoreVideoView();
-    // prefer camera if available, else open file selector
-    if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
-      // show record button
-      const rec = document.getElementById('recordToggle'); if(rec){ rec.style.display = ''; rec.disabled = false; }
-      startCameraBtn.click();
-    }else{
-      if(videoFile) videoFile.click();
-    }
-  });
-}
+      // If mediaRecorder recording, stop it
+      if(mediaRecorder && mediaRecorder.state === 'recording'){ mediaRecorder.stop(); }
 
-// Recording toggle: start/stop
-if(recordToggleBtn){
-  recordToggleBtn.addEventListener('click', ()=>{
-    if(!currentStream) return;
-    if(mediaRecorder && mediaRecorder.state === 'recording'){
-      mediaRecorder.stop();
-      recordToggleBtn.textContent = '녹화 시작';
-      recordToggleBtn.disabled = true;
-      return;
-    }
-    recordedChunks = [];
-    try{ mediaRecorder = new MediaRecorder(currentStream, {mimeType:'video/webm;codecs=vp9'}); }catch(e){ mediaRecorder = new MediaRecorder(currentStream); }
-    mediaRecorder.ondataavailable = (ev)=>{ if(ev.data && ev.data.size>0) recordedChunks.push(ev.data); };
-    mediaRecorder.onstop = async ()=>{
-      if(currentStream){ currentStream.getTracks().forEach(t=>t.stop()); }
-      const blob = new Blob(recordedChunks, {type: recordedChunks[0]?.type || 'video/webm'});
-      const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(f);
+      // prefer setting srcObject to null first
       video.srcObject = null;
       video.src = url;
       video.muted = false;
+
+      // Wait for metadata to be ready
+      await new Promise((res,rej)=>{
+        const t = setTimeout(()=>{ res(); }, 3000);
+        function onMeta(){ clearTimeout(t); video.removeEventListener('loadedmetadata', onMeta); res(); }
+        video.addEventListener('loadedmetadata', onMeta, {once:true});
+      });
+
+      userLog(`비디오 로드 완료: ${Math.round(video.duration||0)}초, ${video.videoWidth}x${video.videoHeight}`);
+      try{ await video.play(); }catch(e){ userLog('자동 재생 실패(사용자 상호작용 필요)'); }
+
+      // enable extract button
+      if(extractFramesBtn) { extractFramesBtn.disabled = false; }
+    }catch(err){
+      userLog('파일 처리 중 오류: ' + (err && err.message));
+    }
+  });
+} else { userLog('videoFile 입력이 없음'); }
+
+// -------------------------
+// Camera handling (simple)
+// -------------------------
+if(startCameraBtn){
+  startCameraBtn.addEventListener('click', async ()=>{
+    try{
+      const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
+      currentStream = s; video.srcObject = s; video.muted = true;
       await video.play().catch(()=>{});
-      // hide record controls until user re-opens camera
-      recordToggleBtn.style.display = 'none'; recordToggleBtn.disabled = true;
-      currentStream = null;
-      // enable extract step after recording is available as a file-like source
-      if(stepExtractBtn) stepExtractBtn.disabled = false;
-      // automatically switch to Frame Extraction tab so user can start extraction
-      try{ switchTab(2); }catch(e){ console.warn('switchTab failed after recording', e); }
-    };
-    mediaRecorder.start();
-    recordToggleBtn.textContent = '녹화 중지';
+      userLog('카메라 스트림 재생 중');
+      if(recordToggleBtn){ recordToggleBtn.style.display = ''; recordToggleBtn.disabled = false; }
+    }catch(err){ userLog('카메라 접근 실패: '+ err.message); alert('카메라 접근 실패: '+err.message); }
   });
 }
 
-function stopCameraStream(){
-  const s = video.srcObject || currentStream;
-  if(s && s.getTracks) s.getTracks().forEach(t=>t.stop());
-  video.srcObject = null;
-  currentStream = null;
+// -------------------------
+// Recording toggle (optional)
+// -------------------------
+if(recordToggleBtn){
+  recordToggleBtn.addEventListener('click', ()=>{
+    if(!currentStream){ userLog('카메라가 활성화되어 있지 않습니다'); return; }
+    if(!mediaRecorder || mediaRecorder.state === 'inactive'){
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(currentStream);
+      mediaRecorder.ondataavailable = (e)=>{ if(e.data && e.data.size) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = ()=>{
+        const blob = new Blob(recordedChunks, {type:'video/webm'});
+        const url = URL.createObjectURL(blob);
+        video.srcObject = null; video.src = url; video.muted = false; video.play().catch(()=>{});
+        userLog('녹화 완료, 재생으로 전환');
+        if(extractFramesBtn) extractFramesBtn.disabled = false;
+      };
+      mediaRecorder.start(); recordToggleBtn.textContent = '녹화 중지';
+      userLog('녹화 시작');
+    } else {
+      mediaRecorder.stop(); recordToggleBtn.textContent = '녹화 시작'; userLog('녹화 중지');
+    }
+  });
 }
 
-if(captureFrameBtn) bindMulti(captureFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); drawOverlay(); });
-
-// Extract frames: sample video at fpsInput value and store canvases
+// -------------------------
+// Frame extraction (seek-based, robust)
+// -------------------------
 async function extractFrames(){
-  if(!video){ alert('비디오 요소가 준비되지 않았습니다.'); return; }
-  // ensure metadata/duration is available
-  if(!video.duration || isNaN(video.duration) || video.duration===0){
-    await new Promise(res=>{ video.addEventListener('loadedmetadata', ()=>res(), {once:true}); });
-  }
-  if(!video.duration || isNaN(video.duration) || video.duration===0){ alert('비디오 정보를 불러오지 못했습니다. 다른 파일을 시도하세요.'); return; }
-  extractedFrames = [];
-  // For stability on mobile, pause playback before performing many seeks
-  try{ video.pause(); }catch(e){ console.warn('video.pause() failed', e); }
-  const fps = getFpsValue();
-  const duration = video.duration;
-  const total = Math.max(1, Math.floor(duration * fps));
-  // Create a hidden capture video element clone to avoid UI/video rendering interference in some browsers
-  let captureVideo = video;
-  let cloneEl = null;
+  if(isExtracting) { userLog('이미 추출 중입니다'); return; }
+  if(!video || (!video.currentSrc && !video.src)) { userLog('추출할 비디오가 없습니다'); return; }
+  // determine source URL
+  const srcUrl = video.currentSrc || video.src;
+  if(!srcUrl){ userLog('비디오 소스 없음'); return; }
+
+  isExtracting = true; extractedFrames = []; currentFrameIndex = 0;
+  extractProgress && (extractProgress.style.display = ''); setProgress(0);
+
   try{
-    cloneEl = document.createElement('video');
-    cloneEl.muted = true; cloneEl.playsInline = true; cloneEl.autoplay = false; cloneEl.controls = false;
-    // copy source
-    if(video.srcObject){ try{ cloneEl.srcObject = video.srcObject; }catch(e){} }
-    if(video.src){ cloneEl.src = video.src; }
-    // Position offscreen but attached so rendering works
-    cloneEl.style.position = 'absolute'; cloneEl.style.left = '-9999px'; cloneEl.style.top = '0px'; cloneEl.style.width = (video.videoWidth || video.clientWidth || 640) + 'px'; cloneEl.style.height = (video.videoHeight || video.clientHeight || 360) + 'px';
-    document.body.appendChild(cloneEl);
-    await new Promise(res=>{ cloneEl.addEventListener('loadedmetadata', ()=>res(), {once:true}); if(cloneEl.readyState>=2) res(); });
-    captureVideo = cloneEl;
-  }catch(e){ console.warn('capture video clone failed, falling back to visible video', e); captureVideo = video; if(cloneEl){ try{ cloneEl.remove(); }catch(_){} } }
-  try{
-    console.log('extractFrames start', {duration, fps, total});
-    // Use the extract button itself as the progress indicator (mobile-friendly)
-    if(extractProgress) extractProgress.style.display = 'none'; // hide original bar
-    if(extractFramesBtn){
-      extractFramesBtn.disabled = true;
-      extractFramesBtn.dataset.origText = extractFramesBtn.innerHTML;
-      // immediately show simple '추출중' status when extraction begins
-      extractFramesBtn.textContent = '추출중';
-      // Make sure button uses block layout on narrow devices
-      extractFramesBtn.style.display = 'inline-block';
-      extractFramesBtn.style.transition = 'background 120ms linear';
-    }
+    // create a hidden capture video element to avoid interfering with UI playback
+    const cap = document.createElement('video');
+    cap.muted = true; cap.preload = 'auto'; cap.crossOrigin = 'anonymous';
+    cap.src = srcUrl;
+    // wait loadedmetadata
+    await new Promise((res,rej)=>{
+      const to = setTimeout(()=>{ res(); }, 4000);
+      cap.addEventListener('loadedmetadata', ()=>{ clearTimeout(to); res(); }, {once:true});
+    });
+    const fpsInput = document.querySelector('#tab-2 #fpsInput') || $('fpsInput');
+    const fps = Math.max(1, Number(fpsInput && fpsInput.value) || 10);
+    const duration = cap.duration || video.duration || 0;
+    const total = Math.max(1, Math.floor(duration * fps));
+    userLog(`프레임 추출: duration=${duration.toFixed(2)}s, fps=${fps}, total=${total}`);
+
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = cap.videoWidth || 640; const cssH = cap.videoHeight || 360;
+
     for(let i=0;i<total;i++){
-    const t = i / fps;
-      const pctNum = Math.round(((i+1)/total)*100);
-      if(progressText) progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
-      // Update extract button visually to show progress
-      if(extractFramesBtn){
-        const txt = `추출중 ${i+1}/${total} (${pctNum}%)`;
-        extractFramesBtn.textContent = txt;
-        // visual fill using linear-gradient background (left: progress colour, right: base)
-        extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 ${pctNum}%, #06b6d4 ${pctNum}%)`;
-        try{ requestAnimationFrame(()=>{ extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 ${pctNum}%, #06b6d4 ${pctNum}%)`; }); }catch(e){}
-      }
-  console.log(`seek to ${t.toFixed(3)}s (${i+1}/${total})`);
-  await seekToTime(t, captureVideo);
-        console.log('after seekToTime resolved for target', t, 'video.currentTime=', video.currentTime);
-      // Wait a frame (or requestVideoFrameCallback) to ensure the video renderer painted the new frame
-      try{
-        if(typeof captureVideo.requestVideoFrameCallback === 'function'){
-          await new Promise(r=> captureVideo.requestVideoFrameCallback(()=>r()));
-        }else{
-          await new Promise(r=> requestAnimationFrame(()=> setTimeout(r, 40)));
-        }
-      }catch(e){ /* swallow */ }
-      const c = captureFrameImage(captureVideo);
-        console.log('captureFrameImage returned', c && c.width, 'x', c && c.height, 'for target', t);
-      // store a copy canvas
-      const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;
-      copy.getContext('2d').drawImage(c,0,0);
-  extractedFrames.push(copy);
-  // small yield
-      // small yield
-      await new Promise(r=>setTimeout(r,10));
+      const t = Math.min(duration, (i / fps));
+      // seek
+      await new Promise((res)=>{
+        let done = false;
+        function onSeek(){ if(done) return; done = true; cap.removeEventListener('seeked', onSeek); res(); }
+        cap.currentTime = t;
+        cap.addEventListener('seeked', onSeek);
+        // safety timeout
+        setTimeout(()=>{ if(!done){ done = true; cap.removeEventListener('seeked', onSeek); res(); } }, 1200);
+      });
+
+      // draw to canvas
+      const c = document.createElement('canvas');
+      c._cssWidth = cssW; c._cssHeight = cssH; c._dpr = dpr;
+      c.width = Math.round(cssW * dpr); c.height = Math.round(cssH * dpr);
+      const ctx = c.getContext('2d');
+      try{ ctx.setTransform(dpr,0,0,dpr,0,0); ctx.drawImage(cap, 0, 0, cssW, cssH); }
+      catch(e){ ctx.fillStyle = '#333'; ctx.fillRect(0,0,cssW,cssH); }
+
+      extractedFrames.push(c);
+      const percent = Math.round(((i+1)/total) * 100);
+      setProgress(percent);
+      if(i % Math.max(1, Math.floor(total/10)) === 0) userLog(`추출 진행: ${i+1}/${total}`);
     }
-    progressText.textContent = `추출 완료: ${extractedFrames.length} frames`;
-    // Debug: log extracted frame canvas sizes to help diagnose blank preview
-    try{
-      console.log('Extracted frames count:', extractedFrames.length);
-      extractedFrames.forEach((cv,idx)=> console.log(`frame[${idx}] size: ${cv.width}x${cv.height}`));
-    }catch(e){}
-  if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
-    // show frame navigation UI
-    const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
-  // Switch UI from video playback to image-per-frame preview to avoid video element interfering with navigation
-    try{
-      const preview = document.getElementById('framePreview');
-      if(preview){ 
-        // size preview to match video's displayed area before hiding the video
-        const wrap = document.querySelector('.video-wrap');
-        const targetW = video.clientWidth || video.videoWidth || (wrap && wrap.clientWidth) || 640;
-        const targetH = video.clientHeight || video.videoHeight || (wrap && wrap.clientHeight) || 360;
-        preview.style.width = targetW + 'px'; preview.style.height = targetH + 'px';
-        preview.style.pointerEvents = 'none';
-        preview.style.display = '';
-      }
-      // hide native video to prevent user confusing playback; keep overlay visible so ROI selection can work on top
-      if(video) video.style.display = 'none';
-      if(overlay) { 
-        overlay.style.display = ''; overlay.style.pointerEvents = 'auto'; 
-        const cssW = (preview && preview.style.width) ? preview.style.width : (video.clientWidth ? video.clientWidth + 'px' : '640px');
-        const cssH = (preview && preview.style.height) ? preview.style.height : (video.clientHeight ? video.clientHeight + 'px' : '360px');
-        overlay.width = parseInt(cssW) || 640; overlay.height = parseInt(cssH) || 360;
-        overlay.style.width = cssW; overlay.style.height = cssH;
-      }
-  }catch(e){ console.warn('Failed to switch UI to framePreview', e); }
-  // remove clone if created
-  try{ if(cloneEl){ cloneEl.pause(); cloneEl.removeAttribute('src'); cloneEl.src = ''; cloneEl.remove(); cloneEl = null; } }catch(e){}
-  // ensure nav buttons are enabled
-  try{ if(prevFrameBtn) prevFrameBtn.disabled = false; if(nextFrameBtn) nextFrameBtn.disabled = false; if(frameROIBtn) frameROIBtn.disabled = false; }catch(e){}
-    currentFrameIndex = 0; showFrame(0);
-    if(stepROIBtn) stepROIBtn.disabled = false;
-    if(stepExtractBtn) stepExtractBtn.disabled = true;
-    if(extractFramesBtn) {
-      // restore button after a short pause so user sees completion
-      setTimeout(()=>{ extractFramesBtn.disabled = false; if(extractFramesBtn.dataset.origText) extractFramesBtn.innerHTML = extractFramesBtn.dataset.origText; extractFramesBtn.style.background = ''; }, 1200);
-    }
-  }catch(err){
-    console.error('extractFrames failed', err);
-    alert('프레임 추출 중 오류가 발생했습니다. 콘솔을 확인하세요.');
-    if(extractFramesBtn) extractFramesBtn.disabled = false;
-    if(progressText) progressText.textContent = '프레임 추출 실패';
-  }
+
+    userLog(`프레임 추출 완료: ${extractedFrames.length}개`);
+    extractProgress && (extractProgress.style.display = 'none'); setProgress(100);
+
+    // show first frame
+    await showFrame(0);
+    // make nav visible
+    document.querySelectorAll('.frame-nav').forEach(el=>el.style.display='flex');
+  }catch(err){ userLog('프레임 추출 오류: ' + (err && err.message)); }
+  finally{ isExtracting = false; extractFramesBtn && (extractFramesBtn.disabled = false); }
 }
 
-if(stepExtractBtn) bindMulti(stepExtractBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(2); extractFrames(); });
-// header tab clicks should switch tabs (use bindMulti to avoid double-firing)
-if(stepROIBtn) bindMulti(stepROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(3); });
-if(stepCameraBtn) bindMulti(stepCameraBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(1); });
-const stepAnalyzeHeader = document.getElementById('stepAnalyze');
-if(stepAnalyzeHeader) bindMulti(stepAnalyzeHeader, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(4); });
+let isExtracting = false; // guard
+if(extractFramesBtn) extractFramesBtn.addEventListener('click', ()=>{ extractFramesBtn.disabled = true; extractFrames(); });
 
-if(selectROIBtn) bindMulti(selectROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); selecting = true; roi = null; alert('영역을 화면에서 터치하거나 마우스로 드래그하여 선택하세요. 완료되면 다시 ROI 버튼을 누르세요.'); });
 
-overlay.addEventListener('pointerdown', (e)=>{
-  if(!selecting) return;
-  const r = overlay.getBoundingClientRect();
-  const startX = e.clientX - r.left;
-  const startY = e.clientY - r.top;
-  let curX = startX, curY = startY;
 
-  function move(ev){
-    curX = ev.clientX - r.left; curY = ev.clientY - r.top;
-    drawOverlay();
-    ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
-    ctx.strokeRect(Math.min(startX,curX), Math.min(startY,curY), Math.abs(curX-startX), Math.abs(curY-startY));
-  }
-  function up(ev){
-    overlay.removeEventListener('pointermove', move);
-    overlay.removeEventListener('pointerup', up);
-    const endX = curX; const endY = curY;
-    roi = {
-      x: Math.min(startX,endX), y: Math.min(startY,endY), w: Math.abs(endX-startX), h: Math.abs(endY-startY)
-    };
-    selecting = false;
-    drawOverlay();
-  }
-  overlay.addEventListener('pointermove', move);
-  overlay.addEventListener('pointerup', up);
-});
+// quick initialization logs
+userLog('앱 초기화 완료 — 업로드→표시→추출 경로가 활성화되었습니다.');
+
+
 
 // Frame navigation and per-frame ROI selection
 async function showFrame(idx){
