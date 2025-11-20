@@ -88,11 +88,18 @@ function onTabShown(n){
 function startExtractionIfReady(e){
   if(e && e.preventDefault) e.preventDefault();
   if(!extractFramesBtn) return;
-  if(extractFramesBtn.disabled){ console.warn('extractFramesBtn is disabled'); return; }
+  // prevent double start
+  if(isExtracting){ console.warn('already extracting'); return; }
+  // if button is disabled but video looks ready, enable and continue
+  try{
+    const ready = !!(video && (video.src || video.srcObject) && (video.readyState >= 2 || (video.duration && !isNaN(video.duration) && video.duration>0)));
+    if(extractFramesBtn.disabled && ready){ extractFramesBtn.disabled = false; }
+    if(extractFramesBtn.disabled){ console.warn('extractFramesBtn is disabled'); mobileLog('버튼이 비활성화되어 시작할 수 없습니다. 비디오를 확인하세요.'); return; }
+  }catch(e){ console.warn('startExtractionIfReady check failed', e); }
   // run extraction (wrapped) and ensure tab 2 is visible
   switchTab(2);
   // Use a microtask to let tab render then start
-  Promise.resolve().then(()=>{ extractFrames(); });
+  Promise.resolve().then(()=>{ isExtracting = true; mobileLog('추출 시작'); extractFrames().catch(err=>{ console.error('extractFrames error', err); mobileLog('추출 오류: '+(err && err.message)); }).finally(()=>{ isExtracting = false; mobileLog('추출 종료'); }); });
 }
 
 function bindExtractButton(){
@@ -101,9 +108,11 @@ function bindExtractButton(){
   extractFramesBtn.removeEventListener('click', startExtractionIfReady);
   extractFramesBtn.removeEventListener('pointerdown', startExtractionIfReady);
   extractFramesBtn.removeEventListener('touchstart', startExtractionIfReady);
+  extractFramesBtn.removeEventListener('touchend', startExtractionIfReady);
   extractFramesBtn.addEventListener('click', startExtractionIfReady);
   extractFramesBtn.addEventListener('pointerdown', startExtractionIfReady);
   extractFramesBtn.addEventListener('touchstart', startExtractionIfReady, {passive:false});
+  extractFramesBtn.addEventListener('touchend', startExtractionIfReady, {passive:false});
   // ensure initial enabled state: enable only if video loaded
   try{ const hasVideo = !!(video && (video.src || video.srcObject)); extractFramesBtn.disabled = !hasVideo; }catch(e){}
 }
@@ -817,11 +826,22 @@ function boxIoU(a,b){
 function seekToTime(t){
   return new Promise((res,rej)=>{
     let done = false;
-    const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); video.removeEventListener('seeked', onseek); res(); };
+    const clearAll = ()=>{ try{ video.removeEventListener('seeked', onseek); video.removeEventListener('timeupdate', ontime); if(typeof cancelVideoFrameCallback === 'function' && vidRVCId) cancelVideoFrameCallback(vidRVCId); }catch(e){} };
+    const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); res(); };
+    const ontime = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); res(); };
+    // If requestVideoFrameCallback is available, use it as a fast reliable hook (newer Safari)
+    let vidRVCId = null;
+    const useRVC = (typeof video.requestVideoFrameCallback === 'function');
+    if(useRVC){
+      try{
+        vidRVCId = video.requestVideoFrameCallback(()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); res(); });
+      }catch(e){ console.warn('requestVideoFrameCallback failed', e); }
+    }
     video.addEventListener('seeked', onseek);
+    video.addEventListener('timeupdate', ontime);
     try{ video.currentTime = Math.min(video.duration || t, t); }catch(err){ console.warn('seekToTime set currentTime failed', err); }
-    // fallback: if seeked doesn't fire within 2000ms (mobile may be slower), resolve anyway to avoid stalling
-    const timer = setTimeout(()=>{ if(done) return; done = true; video.removeEventListener('seeked', onseek); console.warn('seekToTime fallback timeout for', t); res(); }, 2000);
+    // fallback: if neither event fired within 3000ms, resolve anyway to avoid stalling on slow mobile
+    const timer = setTimeout(()=>{ if(done) return; done = true; clearAll(); console.warn('seekToTime fallback timeout for', t); res(); }, 3000);
   });
 }
 
@@ -861,6 +881,17 @@ function analyzeTrackData(){
 }
 
 let analysisResult = null;
+// Extraction guard
+let isExtracting = false;
+
+// On-screen mobile status log (useful for Safari where user may not have console)
+function mobileLog(msg){
+  try{
+    let el = document.getElementById('mobileStatusLog');
+    if(!el){ el = document.createElement('div'); el.id = 'mobileStatusLog'; el.style.position='fixed'; el.style.left='8px'; el.style.right='8px'; el.style.bottom='12px'; el.style.padding='8px 10px'; el.style.background='rgba(0,0,0,0.6)'; el.style.color='#fff'; el.style.fontSize='12px'; el.style.borderRadius='8px'; el.style.zIndex='9999'; el.style.maxHeight='160px'; el.style.overflow='auto'; document.body.appendChild(el); }
+    const p = document.createElement('div'); p.textContent = `${new Date().toLocaleTimeString()} ${msg}`; el.appendChild(p); if(el.childNodes.length>6) el.removeChild(el.firstChild);
+  }catch(e){ console.warn('mobileLog failed', e); }
+}
 
 function drawCharts(points, speeds){
   const labels = points.map(p=>p.t.toFixed(2));
