@@ -117,8 +117,10 @@ function startExtractionIfReady(e){
   }catch(e){ console.warn('startExtractionIfReady check failed', e); }
   // run extraction (wrapped) and ensure tab 2 is visible
   switchTab(2);
-  // Use a microtask to let tab render then start
-  Promise.resolve().then(()=>{ isExtracting = true; mobileLog('추출 시작'); extractFrames().catch(err=>{ console.error('extractFrames error', err); mobileLog('추출 오류: '+(err && err.message)); }).finally(()=>{ isExtracting = false; mobileLog('추출 종료'); }); });
+  // Mark extracting immediately to avoid duplicate triggers from multiple events
+  isExtracting = true; mobileLog('추출 시작');
+  // Start extraction in next tick so UI can render
+  Promise.resolve().then(()=>{ extractFrames().catch(err=>{ console.error('extractFrames error', err); mobileLog('추출 오류: '+(err && err.message)); }).finally(()=>{ isExtracting = false; mobileLog('추출 종료'); }); });
 }
 
 function bindExtractButton(){
@@ -139,23 +141,25 @@ function bindExtractButton(){
 // bind now
 bindExtractButton();
 
+// Global helper to safely bind handlers across click/pointer/touch and avoid duplicate firing
+function bindMulti(el, handler, cooldown=150){
+  if(!el) return;
+  try{ if(el._lastWrapper) { el.removeEventListener('click', el._lastWrapper); el.removeEventListener('pointerdown', el._lastWrapper); el.removeEventListener('touchstart', el._lastWrapper); el.removeEventListener('touchend', el._lastWrapper); } }catch(e){}
+  const wrapper = function(ev){
+    try{ if(el.__handlerLock) { return; } }catch(e){}
+    el.__handlerLock = true;
+    try{ handler(ev); }catch(err){ console.error('handler error', err); }
+    setTimeout(()=>{ try{ el.__handlerLock = false; }catch(e){} }, cooldown);
+  };
+  el._lastWrapper = wrapper;
+  el.addEventListener('click', wrapper);
+  el.addEventListener('pointerdown', wrapper);
+  el.addEventListener('touchstart', wrapper, {passive:true});
+  el.addEventListener('touchend', wrapper, {passive:true});
+}
+
 // Robustly bind other UI buttons (prev/next/frame ROI/play/export) to support click/pointer/touch across devices
 function bindAllUI(){
-  // helper to safely bind multiple event types
-  function bindMulti(el, handler){
-    if(!el) return;
-    el.removeEventListener('click', handler);
-    el.removeEventListener('pointerdown', handler);
-    el.removeEventListener('touchstart', handler);
-    el.removeEventListener('touchend', handler);
-    el.addEventListener('click', handler);
-    el.addEventListener('pointerdown', handler);
-    el.addEventListener('touchstart', handler, {passive:true});
-    el.addEventListener('touchend', handler, {passive:true});
-  }
-
-  bindMulti(prevFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); showFrame(currentFrameIndex-1); });
-  bindMulti(nextFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); showFrame(currentFrameIndex+1); });
   bindMulti(frameROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault();
     // reuse existing handler logic: open selection mode for current frame
     if(!extractedFrames || !extractedFrames.length) { mobileLog('프레임이 없습니다. 먼저 추출하세요.'); return; }
@@ -177,7 +181,7 @@ function bindAllUI(){
 
   bindMulti(playResultsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); playResults(); switchTab(4); });
   bindMulti(completeROIsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(4); if(stepAnalyzeBtn) stepAnalyzeBtn.click(); });
-  // exportCSVBtn already has its own handler; no need to rebind to avoid recursion
+  // exportCSVBtn already has its own handler which we wrap elsewhere
 }
 
 // call binding for other UI
@@ -306,10 +310,7 @@ function stopCameraStream(){
   currentStream = null;
 }
 
-if(captureFrameBtn) captureFrameBtn.addEventListener('click', ()=>{
-  // draw current frame to overlay for user to save/view
-  drawOverlay();
-});
+if(captureFrameBtn) bindMulti(captureFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); drawOverlay(); });
 
 // Extract frames: sample video at fpsInput value and store canvases
 async function extractFrames(){
@@ -389,21 +390,14 @@ async function extractFrames(){
   }
 }
 
-if(stepExtractBtn){ stepExtractBtn.addEventListener('click', ()=>{ extractFrames(); }); }
-// also switch to tab 2 when extract button clicked
-if(stepExtractBtn) stepExtractBtn.addEventListener('click', ()=>{ switchTab(2); });
-// header tab clicks should switch tabs
-if(stepExtractBtn) stepExtractBtn.addEventListener('click', ()=>{ switchTab(2); });
-if(stepROIBtn) stepROIBtn.addEventListener('click', ()=>{ switchTab(3); });
-if(stepCameraBtn) stepCameraBtn.addEventListener('click', ()=>{ switchTab(1); });
+if(stepExtractBtn) bindMulti(stepExtractBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(2); extractFrames(); });
+// header tab clicks should switch tabs (use bindMulti to avoid double-firing)
+if(stepROIBtn) bindMulti(stepROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(3); });
+if(stepCameraBtn) bindMulti(stepCameraBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(1); });
 const stepAnalyzeHeader = document.getElementById('stepAnalyze');
-if(stepAnalyzeHeader) stepAnalyzeHeader.addEventListener('click', ()=>{ switchTab(4); });
+if(stepAnalyzeHeader) bindMulti(stepAnalyzeHeader, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(4); });
 
-if(selectROIBtn) selectROIBtn.addEventListener('click', ()=>{
-  selecting = true;
-  roi = null;
-  alert('영역을 화면에서 터치하거나 마우스로 드래그하여 선택하세요. 완료되면 다시 ROI 버튼을 누르세요.');
-});
+if(selectROIBtn) bindMulti(selectROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); selecting = true; roi = null; alert('영역을 화면에서 터치하거나 마우스로 드래그하여 선택하세요. 완료되면 다시 ROI 버튼을 누르세요.'); });
 
 overlay.addEventListener('pointerdown', (e)=>{
   if(!selecting) return;
@@ -475,26 +469,18 @@ function showFrame(idx){
 
 // Rebind prev/next to click-only handlers with debug logging for reliability
 if(prevFrameBtn){
-  prevFrameBtn.removeEventListener('click', ()=>{});
-  prevFrameBtn.addEventListener('click', (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('prevFrame clicked, current', currentFrameIndex); mobileLog('◀ 클릭'); showFrame(currentFrameIndex-1); });
+  bindMulti(prevFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('prevFrame clicked, current', currentFrameIndex); mobileLog('◀ 클릭'); showFrame(currentFrameIndex-1); });
 }
 if(nextFrameBtn){
-  nextFrameBtn.removeEventListener('click', ()=>{});
-  nextFrameBtn.addEventListener('click', (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('nextFrame clicked, current', currentFrameIndex); mobileLog('▶ 클릭'); showFrame(currentFrameIndex+1); });
+  bindMulti(nextFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('nextFrame clicked, current', currentFrameIndex); mobileLog('▶ 클릭'); showFrame(currentFrameIndex+1); });
 }
 
 // extractFramesBtn binding is handled by bindExtractButton() above which supports click/pointer/touch events
 
 // complete ROIs button triggers analysis (stepAnalyzeBtn handler)
-if(completeROIsBtn){
-  completeROIsBtn.addEventListener('click', ()=>{
-    // move to analyze tab then run analysis
-    switchTab(4);
-    if(stepAnalyzeBtn) stepAnalyzeBtn.click();
-  });
-}
+if(completeROIsBtn){ bindMulti(completeROIsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(4); if(stepAnalyzeBtn) stepAnalyzeBtn.click(); }); }
 
-if(playResultsBtn){ playResultsBtn.addEventListener('click', ()=>{ playResults(); switchTab(4); }); }
+if(playResultsBtn){ bindMulti(playResultsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); playResults(); switchTab(4); }); }
 
 function drawOverlay(){
   ctx.clearRect(0,0,overlay.width,overlay.height);
@@ -686,7 +672,8 @@ if(inspectModelBtn){
     }, 1000 / fps);
   }
 
-if(runDetectBtn) runDetectBtn.addEventListener('click', async ()=>{
+if(runDetectBtn) bindMulti(runDetectBtn, async (e)=>{
+  if(e && e.preventDefault) e.preventDefault();
   if(!modelLoaded){
     if(!confirm('YOLO 모델이 로드되지 않았습니다. 계속해서 ROI 기반 수동 분석을 수행하시겠습니까?')) return;
     analyzeByROI();
@@ -983,7 +970,8 @@ function drawCharts(points, speeds){
   velChart = new Chart(velCtx, {type:'line', data:{labels,datasets:[{label:'Speed (units/s)', data:speedData, borderColor:'#60a5fa', tension:0.2, spanGaps:true}]}, options:{responsive:true, maintainAspectRatio:false}});
 }
 
-exportCSVBtn.addEventListener('click', ()=>{
+if(exportCSVBtn) bindMulti(exportCSVBtn, (e)=>{
+  if(e && e.preventDefault) e.preventDefault();
   if(!analysisResult){ alert('분석 후 내보내기 하세요.'); return; }
   const rows = [['frame','time_s','x_px','y_px','x_unit','y_unit','speed_unit_s','acc_unit_s2']];
   for(let i=0;i<detectionsPerFrame.length;i++){
