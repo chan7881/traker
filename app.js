@@ -28,6 +28,9 @@ let currentStream = null;
 let mediaRecorder = null;
 let recordedChunks = [];
 
+// Start with inspect button disabled until a model is found
+if(inspectModelBtn) inspectModelBtn.disabled = true;
+
 // Analysis data
 let detectionsPerFrame = []; // [{time, box: [x1,y1,x2,y2], score}]
 let scalePxPerUnit = parseFloat(scaleInput.value) || 1;
@@ -181,26 +184,48 @@ function mapBoxToOverlay(box){
 }
 
 async function loadModel(){
-  // Try to fetch the model URL first and provide clearer guidance when fetch fails (CORS/404).
+  // Try several common locations (useful for GitHub Pages where repo path may vary)
+  const candidatePaths = [
+    './yolov8n.onnx',
+    './model/yolov8n.onnx',
+    '/yolov8n.onnx',
+    '/model/yolov8n.onnx'
+  ];
   const opts = {executionProviders:['wasm','webgl']};
-  try{
-    const resp = await fetch(modelPath, {method:'GET'});
-    if(!resp.ok){
-      console.warn('모델 파일을 가져오지 못했습니다', resp.status);
-      modelLoaded = false;
-      alert(`모델 파일을 서버에서 불러오지 못했습니다 (HTTP ${resp.status}).\n\nREADME의 안내대로 프로젝트를 HTTP 서버로 제공하거나, '모델 업로드'로 ONNX 파일을 선택하세요.`);
+  const statusEl = document.getElementById('status');
+  if(statusEl) statusEl.textContent = '모델 로드 상태: 로딩 시도 중...';
+  let lastErr = null;
+  for(const p of candidatePaths){
+    try{
+      const url = p;
+      console.log('시도중인 모델 경로:', url);
+      const resp = await fetch(url, {method:'GET'});
+      if(!resp.ok){
+        console.warn('경로에서 모델을 찾지 못함', url, resp.status);
+        lastErr = new Error('HTTP '+resp.status);
+        continue;
+      }
+      const arrayBuffer = await resp.arrayBuffer();
+      modelSession = await ort.InferenceSession.create(arrayBuffer, opts);
+      modelLoaded = true;
+      console.log('Model loaded from', url);
+      console.log('Model input names:', modelSession.inputNames, 'output names:', modelSession.outputNames);
+  if(statusEl) statusEl.textContent = `모델 로드 상태: 성공 (${url})`;
+  // enable inspect button (model-dependent). keep runDetectBtn enabled for ROI fallback.
+  if(inspectModelBtn) inspectModelBtn.disabled = false;
       return;
+    }catch(err){
+      console.warn('모델 로드 실패 경로:', p, err);
+      lastErr = err;
+      continue;
     }
-    const arrayBuffer = await resp.arrayBuffer();
-    modelSession = await ort.InferenceSession.create(arrayBuffer, opts);
-    modelLoaded = true;
-    console.log('Model input names:', modelSession.inputNames, 'output names:', modelSession.outputNames);
-    alert('모델을 로드했습니다. YOLO ONNX가 준비되었습니다. 콘솔에 입/출력 텐서 정보를 출력했습니다.');
-  }catch(err){
-    console.warn('모델 로드 실패', err);
-    modelLoaded = false;
-    alert('모델 로드 실패: 네트워크(CORS) 문제 또는 파일이 존재하지 않습니다.\n\n모델이 로컬에 있을 경우 "모델 업로드"로 ONNX 파일을 선택하세요.');
   }
+  // If we reach here, none of the candidate paths worked
+  modelLoaded = false;
+  if(statusEl) statusEl.innerHTML = '모델 로드 상태: 실패 — yolov8n.onnx 파일을 프로젝트 루트에 업로드하세요. (예: GitHub Pages의 경우 repo root 또는 docs/에 업로드)';
+  // disable model-only UI (inspect), but keep runDetect available for manual ROI analysis
+  if(inspectModelBtn) inspectModelBtn.disabled = true;
+  console.error('모델을 찾지 못했습니다. 마지막 오류:', lastErr);
 }
 
 // Try to load model at startup (non-blocking)
