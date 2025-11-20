@@ -483,10 +483,15 @@ overlay.addEventListener('pointerdown', (e)=>{
 });
 
 // Frame navigation and per-frame ROI selection
-function showFrame(idx){
+async function showFrame(idx){
   if(!extractedFrames || !extractedFrames.length) return;
   currentFrameIndex = Math.max(0, Math.min(idx, extractedFrames.length-1));
   const c = extractedFrames[currentFrameIndex];
+  // Quick visual debug aid and timing guard
+  const DBG = (typeof window._TRAKER_DEBUG === 'undefined') ? true : window._TRAKER_DEBUG;
+  if(DBG) console.log('showFrame start', {idx:currentFrameIndex, extractedCanvasW:c.width, extractedCanvasH:c.height, cssMeta: {cssW:c._cssWidth, cssH:c._cssHeight, dpr:c._dpr}});
+  // wait one frame to ensure any pending layout/paint is done (helps mobile browsers)
+  try{ await new Promise(r => requestAnimationFrame(r)); }catch(e){}
   // draw frame into overlay sized to the visible video area (DPI-aware)
   // Prefer preview image size when present (we hide the video element after extraction)
   const previewEl = document.getElementById('framePreview');
@@ -517,6 +522,11 @@ function showFrame(idx){
     drawCtx.drawImage(c, 0,0, c.width, c.height, 0,0, displayW, displayH);
   }catch(e){
     console.warn('showFrame drawImage failed', e, 'canvas:', c.width, c.height, 'display:', displayW, displayH);
+  }
+  if(DBG){
+    try{ overlay.style.visibility = 'visible'; overlay.style.outline = '2px solid rgba(255,0,0,0.45)'; }catch(e){}
+    try{ const prev = document.getElementById('framePreview'); if(prev){ prev.style.visibility='visible'; prev.style.outline='2px solid rgba(0,200,255,0.45)'; } }catch(e){}
+    setTimeout(()=>{ try{ overlay.style.outline=''; const prev = document.getElementById('framePreview'); if(prev) prev.style.outline=''; }catch(e){} }, 1500);
   }
   // if ROI exists for this frame, draw it
   const roiObj = frameROIs[currentFrameIndex];
