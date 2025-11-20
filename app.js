@@ -7,10 +7,13 @@ const ctx = overlay.getContext('2d');
 
 const videoFile = document.getElementById('videoFile');
 const startCameraBtn = document.getElementById('startCamera');
+const recordToggleBtn = document.getElementById('recordToggle');
 const captureFrameBtn = document.getElementById('captureFrame');
 const selectROIBtn = document.getElementById('selectROI');
 const runDetectBtn = document.getElementById('runDetect');
 const exportCSVBtn = document.getElementById('exportCSV');
+const modelFileInput = document.getElementById('modelFile');
+const inspectModelBtn = document.getElementById('inspectModel');
 
 const fpsInput = document.getElementById('fpsInput');
 const confInput = document.getElementById('confInput');
@@ -19,6 +22,9 @@ const scaleInput = document.getElementById('scaleInput');
 let modelSession = null;
 let modelLoaded = false;
 let modelPath = 'model/yolov8n.onnx'; // 사용자 제공
+let currentStream = null;
+let mediaRecorder = null;
+let recordedChunks = [];
 
 // Analysis data
 let detectionsPerFrame = []; // [{time, box: [x1,y1,x2,y2], score}]
@@ -45,25 +51,66 @@ videoFile.addEventListener('change', (e)=>{
   const f = e.target.files && e.target.files[0];
   if(!f) return;
   const url = URL.createObjectURL(f);
-  stopCameraStream();
+  // If a camera stream is active, stop it so we treat this as an uploaded file
+  if(currentStream){ currentStream.getTracks().forEach(t=>t.stop()); currentStream = null; }
+  if(mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  video.srcObject = null;
   video.src = url;
+  video.muted = false;
   video.play();
 });
 
+// Camera flow: open preview and enable recording. Recording will create a blob video which
+// replaces the preview as a file-like source for analysis.
 startCameraBtn.addEventListener('click', async ()=>{
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:true});
+    currentStream = stream;
     video.srcObject = stream;
-    video.play();
+    video.muted = true;
+    await video.play();
+    // enable record button and show it
+    if(recordToggleBtn){ recordToggleBtn.style.display = ''; recordToggleBtn.disabled = false; recordToggleBtn.textContent = '녹화 시작'; }
   }catch(err){
     alert('카메라 권한이 필요합니다: '+err.message);
   }
 });
 
+// Recording toggle: start/stop
+if(recordToggleBtn){
+  recordToggleBtn.addEventListener('click', ()=>{
+    if(!currentStream) return;
+    if(mediaRecorder && mediaRecorder.state === 'recording'){
+      mediaRecorder.stop();
+      recordToggleBtn.textContent = '녹화 시작';
+      recordToggleBtn.disabled = true;
+      return;
+    }
+    recordedChunks = [];
+    try{ mediaRecorder = new MediaRecorder(currentStream, {mimeType:'video/webm;codecs=vp9'}); }catch(e){ mediaRecorder = new MediaRecorder(currentStream); }
+    mediaRecorder.ondataavailable = (ev)=>{ if(ev.data && ev.data.size>0) recordedChunks.push(ev.data); };
+    mediaRecorder.onstop = async ()=>{
+      if(currentStream){ currentStream.getTracks().forEach(t=>t.stop()); }
+      const blob = new Blob(recordedChunks, {type: recordedChunks[0]?.type || 'video/webm'});
+      const url = URL.createObjectURL(blob);
+      video.srcObject = null;
+      video.src = url;
+      video.muted = false;
+      await video.play().catch(()=>{});
+      // hide record controls until user re-opens camera
+      recordToggleBtn.style.display = 'none'; recordToggleBtn.disabled = true;
+      currentStream = null;
+    };
+    mediaRecorder.start();
+    recordToggleBtn.textContent = '녹화 중지';
+  });
+}
+
 function stopCameraStream(){
-  const s = video.srcObject;
+  const s = video.srcObject || currentStream;
   if(s && s.getTracks) s.getTracks().forEach(t=>t.stop());
   video.srcObject = null;
+  currentStream = null;
 }
 
 captureFrameBtn.addEventListener('click', ()=>{
@@ -132,20 +179,88 @@ function mapBoxToOverlay(box){
 }
 
 async function loadModel(){
+  // Try to fetch the model URL first and provide clearer guidance when fetch fails (CORS/404).
+  const opts = {executionProviders:['wasm','webgl']};
   try{
-    const opts = {executionProviders:['wasm','webgl']};
-    modelSession = await ort.InferenceSession.create(modelPath, opts);
+    const resp = await fetch(modelPath, {method:'GET'});
+    if(!resp.ok){
+      console.warn('모델 파일을 가져오지 못했습니다', resp.status);
+      modelLoaded = false;
+      alert(`모델 파일을 서버에서 불러오지 못했습니다 (HTTP ${resp.status}).\n\nREADME의 안내대로 프로젝트를 HTTP 서버로 제공하거나, '모델 업로드'로 ONNX 파일을 선택하세요.`);
+      return;
+    }
+    const arrayBuffer = await resp.arrayBuffer();
+    modelSession = await ort.InferenceSession.create(arrayBuffer, opts);
     modelLoaded = true;
-    alert('모델을 로드했습니다. YOLO ONNX가 준비되었습니다.');
+    console.log('Model input names:', modelSession.inputNames, 'output names:', modelSession.outputNames);
+    alert('모델을 로드했습니다. YOLO ONNX가 준비되었습니다. 콘솔에 입/출력 텐서 정보를 출력했습니다.');
   }catch(err){
     console.warn('모델 로드 실패', err);
     modelLoaded = false;
-    alert('모델 로드 실패: model/yolov8n.onnx 파일이 존재하고 CORS/서버가 필요합니다. 수동 ROI 추적 기능은 계속 사용 가능합니다.');
+    alert('모델 로드 실패: 네트워크(CORS) 문제 또는 파일이 존재하지 않습니다.\n\n모델이 로컬에 있을 경우 "모델 업로드"로 ONNX 파일을 선택하세요.');
   }
 }
 
 // Try to load model at startup (non-blocking)
 loadModel();
+
+// Allow user to upload a model file to avoid CORS/server issues
+if(modelFileInput){
+  modelFileInput.addEventListener('change', async (e)=>{
+    const f = e.target.files && e.target.files[0];
+    if(!f) return;
+    try{
+      const ab = await f.arrayBuffer();
+      const opts = {executionProviders:['wasm','webgl']};
+      modelSession = await ort.InferenceSession.create(ab, opts);
+      modelLoaded = true;
+      alert('업로드한 모델을 성공적으로 로드했습니다.');
+    }catch(err){
+      console.error('업로드한 모델 로드 실패', err);
+      modelLoaded = false;
+      alert('업로드한 모델을 로드하지 못했습니다. 파일이 올바른 ONNX인지 확인하세요.');
+    }
+  });
+}
+
+// Inspect model: run a single dry-run inference with a zero tensor and print outputs
+if(inspectModelBtn){
+  inspectModelBtn.addEventListener('click', async ()=>{
+    if(!modelLoaded || !modelSession){
+      alert('모델이 로드되어 있지 않습니다. 먼저 모델을 업로드하거나 서버에서 로드하세요.');
+      return;
+    }
+    try{
+      const inputName = modelSession.inputNames[0];
+      // Create a zero tensor matching a common input shape [1,3,640,640]
+      const size = 640;
+      const tensorSize = 1*3*size*size;
+      const zeros = new Float32Array(tensorSize);
+      const testTensor = new ort.Tensor('float32', zeros, [1,3,size,size]);
+      const feeds = {};
+      feeds[inputName] = testTensor;
+      console.log('Running dry-run inference (zero tensor) on input:', inputName);
+      const out = await modelSession.run(feeds);
+      console.log('Dry-run outputs:');
+      for(const k of Object.keys(out)){
+        const t = out[k];
+        console.log('Output name:', k, 'shape:', t.dims, 'type:', t.type);
+        // print small sample
+        try{ console.log('Sample values (first 60):', Array.from(t.data).slice(0,60)); }catch(e){ console.log('Cannot read sample values for', k, e); }
+      }
+      // Try parsing the first output through our parser (if suitable)
+      const firstOutName = modelSession.outputNames && modelSession.outputNames[0];
+      if(firstOutName && out[firstOutName]){
+        const parsed = parseYoloOutput(out[firstOutName], {dx:0,dy:0,scale:1}, Number(confInput.value)||0.1);
+        console.log('Parsed detections sample (first 20):', parsed.slice(0,20));
+      }
+      alert('모델 검사가 완료되었습니다. 콘솔(개발자 도구)을 확인하세요.');
+    }catch(err){
+      console.error('Inspect model failed', err);
+      alert('모델 검사 중 오류가 발생했습니다. 콘솔을 확인하세요.');
+    }
+  });
+}
 
 runDetectBtn.addEventListener('click', async ()=>{
   if(!modelLoaded){
@@ -271,31 +386,59 @@ function preprocessForYOLO(canvas, size){
 }
 
 function parseYoloOutput(outputTensor, padInfo, confThreshold){
-  // outputTensor is ort.Tensor
-  // convert to JS array
-  const data = outputTensor.data;
-  const shape = outputTensor.dims; // [1,N,85]
+  // Flexible parser for common YOLOv8 ONNX exports.
+  // Handles outputs shaped [1,N,C] or [N,C] where C >= 5 (xywh + obj + classes)
   const results = [];
-  if(shape.length<3) return results;
-  const N = shape[1];
-  const C = shape[2];
+  if(!outputTensor) return results;
+  const data = outputTensor.data;
+  const shape = outputTensor.dims || [];
+  let N=0, C=0, offsetRow=0;
+  if(shape.length===3 && shape[0]===1){ N = shape[1]; C = shape[2]; offsetRow = C; }
+  else if(shape.length===2){ N = shape[0]; C = shape[1]; offsetRow = C; }
+  else {
+    console.warn('Unexpected model output shape', shape);
+    return results;
+  }
+
   for(let i=0;i<N;i++){
-    const offset = i*C;
-    const cx = data[offset+0]; const cy = data[offset+1]; const w = data[offset+2]; const h = data[offset+3];
-    const objConf = data[offset+4];
-    // class probs
+    const base = i*offsetRow;
+    // Guard against short rows
+    if(base + Math.min(6,C) > data.length) break;
+
+    // Typical layout: [cx,cy,w,h,obj_conf, class_probs...]
+    const cx = data[base + 0];
+    const cy = data[base + 1];
+    const w = data[base + 2];
+    const h = data[base + 3];
+
+    // objectness / confidence
+    const objConf = (C>4) ? data[base + 4] : 1.0;
+
+    // class probabilities may start at index 5
     let cls = 0; let maxp = 0;
-    for(let c=5;c<C;c++){ if(data[offset+c]>maxp){ maxp=data[offset+c]; cls=c-5; } }
+    if(C > 5){
+      for(let c=5;c<C;c++){ const p = data[base + c]; if(p>maxp){ maxp = p; cls = c-5; } }
+    } else if(C===6){
+      // sometimes last column is a single class id/score
+      maxp = data[base + 5] || 1.0;
+      cls = 0;
+    } else {
+      maxp = 1.0; cls = 0;
+    }
+
     const score = objConf * maxp;
     if(score < confThreshold) continue;
-    // coordinates are on the input size (letterboxed). Convert to original video pixel coords
+
+    // convert from letterboxed input coords back to original video pixels
+    // many ONNX exports use xywh in pixels relative to the model input size
     const x1 = (cx - w/2 - padInfo.dx)/padInfo.scale;
     const y1 = (cy - h/2 - padInfo.dy)/padInfo.scale;
     const x2 = (cx + w/2 - padInfo.dx)/padInfo.scale;
     const y2 = (cy + h/2 - padInfo.dy)/padInfo.scale;
+
     results.push({box:[x1,y1,x2,y2], score, class:cls});
   }
-  // sort by score desc and NMS
+
   results.sort((a,b)=>b.score-a.score);
   return nms(results, 0.45);
 }
