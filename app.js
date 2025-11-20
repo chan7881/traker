@@ -74,6 +74,10 @@ switchTab(1);
 // Start with inspect button disabled until a model is found
 if(inspectModelBtn) inspectModelBtn.disabled = true;
 
+// Immediately show model loading attempt text so user isn't left with '대기 중'
+const statusElInit = document.getElementById('status');
+if(statusElInit) statusElInit.textContent = '모델 로드 상태: 로딩 시도 중...';
+
 // Analysis data
 let detectionsPerFrame = []; // [{time, box: [x1,y1,x2,y2], score}]
 let scalePxPerUnit = parseFloat(scaleInput.value) || 1;
@@ -166,6 +170,8 @@ if(recordToggleBtn){
       // hide record controls until user re-opens camera
       recordToggleBtn.style.display = 'none'; recordToggleBtn.disabled = true;
       currentStream = null;
+      // enable extract step after recording is available as a file-like source
+      if(stepExtractBtn) stepExtractBtn.disabled = false;
     };
     mediaRecorder.start();
     recordToggleBtn.textContent = '녹화 중지';
@@ -221,6 +227,8 @@ if(stepExtractBtn) stepExtractBtn.addEventListener('click', ()=>{ switchTab(2); 
 if(stepExtractBtn) stepExtractBtn.addEventListener('click', ()=>{ switchTab(2); });
 if(stepROIBtn) stepROIBtn.addEventListener('click', ()=>{ switchTab(3); });
 if(stepCameraBtn) stepCameraBtn.addEventListener('click', ()=>{ switchTab(1); });
+const stepAnalyzeHeader = document.getElementById('stepAnalyze');
+if(stepAnalyzeHeader) stepAnalyzeHeader.addEventListener('click', ()=>{ switchTab(4); });
 
 selectROIBtn.addEventListener('click', ()=>{
   selecting = true;
