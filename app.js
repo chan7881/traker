@@ -176,6 +176,8 @@ if(recordToggleBtn){
       currentStream = null;
       // enable extract step after recording is available as a file-like source
       if(stepExtractBtn) stepExtractBtn.disabled = false;
+      // automatically switch to Frame Extraction tab so user can start extraction
+      try{ switchTab(2); }catch(e){ console.warn('switchTab failed after recording', e); }
     };
     mediaRecorder.start();
     recordToggleBtn.textContent = '녹화 중지';
@@ -206,31 +208,38 @@ async function extractFrames(){
   const fps = Number(fpsInput.value) || 10;
   const duration = video.duration;
   const total = Math.max(1, Math.floor(duration * fps));
-  if(extractProgress) extractProgress.style.display = '';
-  if(progressBar) progressBar.style.width = '0%';
-  if(progressText) progressText.textContent = `프레임 추출: 0 / ${total}`;
-  if(extractFramesBtn) extractFramesBtn.disabled = true;
-  for(let i=0;i<total;i++){
+  try{
+    if(extractProgress) extractProgress.style.display = '';
+    if(progressBar) progressBar.style.width = '0%';
+    if(progressText) progressText.textContent = `프레임 추출: 0 / ${total}`;
+    if(extractFramesBtn) extractFramesBtn.disabled = true;
+    for(let i=0;i<total;i++){
     const t = i / fps;
-    if(progressText) progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
-    if(progressBar) progressBar.style.width = `${Math.round(((i+1)/total)*100)}%`;
-    await seekToTime(t);
-    const c = captureFrameImage();
-    // store a copy canvas
-    const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;
-    copy.getContext('2d').drawImage(c,0,0);
-    extractedFrames.push(copy);
-    // small yield
-    await new Promise(r=>setTimeout(r,10));
+      if(progressText) progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
+      if(progressBar) progressBar.style.width = `${Math.round(((i+1)/total)*100)}%`;
+      await seekToTime(t);
+      const c = captureFrameImage();
+      // store a copy canvas
+      const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;
+      copy.getContext('2d').drawImage(c,0,0);
+      extractedFrames.push(copy);
+      // small yield
+      await new Promise(r=>setTimeout(r,10));
+    }
+    progressText.textContent = `추출 완료: ${extractedFrames.length} frames`;
+    progressBar.style.width = '100%';
+    // show frame navigation UI
+    const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
+    currentFrameIndex = 0; showFrame(0);
+    if(stepROIBtn) stepROIBtn.disabled = false;
+    if(stepExtractBtn) stepExtractBtn.disabled = true;
+    if(extractFramesBtn) extractFramesBtn.disabled = false;
+  }catch(err){
+    console.error('extractFrames failed', err);
+    alert('프레임 추출 중 오류가 발생했습니다. 콘솔을 확인하세요.');
+    if(extractFramesBtn) extractFramesBtn.disabled = false;
+    if(progressText) progressText.textContent = '프레임 추출 실패';
   }
-  progressText.textContent = `추출 완료: ${extractedFrames.length} frames`;
-  progressBar.style.width = '100%';
-  // show frame navigation UI
-  const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
-  currentFrameIndex = 0; showFrame(0);
-  if(stepROIBtn) stepROIBtn.disabled = false;
-  if(stepExtractBtn) stepExtractBtn.disabled = true;
-  if(extractFramesBtn) extractFramesBtn.disabled = false;
 }
 
 if(stepExtractBtn){ stepExtractBtn.addEventListener('click', ()=>{ extractFrames(); }); }
