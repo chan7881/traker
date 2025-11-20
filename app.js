@@ -92,6 +92,10 @@ try{
   if(overlay){ overlay.style.position = 'absolute'; overlay.style.left = '0'; overlay.style.top = '0'; overlay.style.zIndex = '3'; }
 }catch(e){ console.warn('video-wrap/overlay init failed', e); }
 
+// Navigation & listener guards
+let lastNavTime = 0; // timestamp of last prev/next navigation
+let activeFrameSaveListener = null; // currently attached save listener for frame ROI
+
 // When tab 2 becomes visible, ensure extract button is enabled when a video source exists
 function onTabShown(n){
   if(n===2){
@@ -163,8 +167,12 @@ function bindAllUI(){
   bindMulti(frameROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault();
     // reuse existing handler logic: open selection mode for current frame
     if(!extractedFrames || !extractedFrames.length) { mobileLog('프레임이 없습니다. 먼저 추출하세요.'); return; }
+    // prevent multiple activations
+    if(selecting) { mobileLog('이미 ROI 선택 모드입니다'); return; }
     selecting = true; mobileLog('프레임 ROI 선택 모드로 진입');
     alert('이 프레임에서 ROI를 드래그하여 선택하세요. 선택 후 빈 공간을 누르거나 다시 ROI 버튼을 누르세요.');
+    // if a previous save listener exists, remove it to avoid duplicates
+    try{ if(activeFrameSaveListener) { overlay.removeEventListener('pointerup', activeFrameSaveListener); activeFrameSaveListener = null; } }catch(e){}
     const saveListener = ()=>{
       if(roi){
         const scaleX = extractedFrames[currentFrameIndex].width / overlay.width;
@@ -174,8 +182,9 @@ function bindAllUI(){
         if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = false;
         mobileLog(`ROI 저장: frame ${currentFrameIndex+1}`);
       }
-      overlay.removeEventListener('pointerup', saveListener);
+      try{ if(activeFrameSaveListener){ overlay.removeEventListener('pointerup', activeFrameSaveListener); activeFrameSaveListener = null; } }catch(e){}
     };
+    activeFrameSaveListener = saveListener;
     overlay.addEventListener('pointerup', saveListener);
   });
 
@@ -368,10 +377,18 @@ async function extractFrames(){
     // Switch UI from video playback to image-per-frame preview to avoid video element interfering with navigation
     try{
       const preview = document.getElementById('framePreview');
-      if(preview){ preview.style.display = ''; }
+      if(preview){ 
+        // size preview to match video's displayed area before hiding the video
+        const wrap = document.querySelector('.video-wrap');
+        const targetW = video.clientWidth || video.videoWidth || (wrap && wrap.clientWidth) || 640;
+        const targetH = video.clientHeight || video.videoHeight || (wrap && wrap.clientHeight) || 360;
+  preview.style.width = targetW + 'px'; preview.style.height = targetH + 'px';
+  preview.style.pointerEvents = 'none';
+  preview.style.display = '';
+      }
       // hide native video to prevent user confusing playback; keep overlay visible so ROI selection can work on top
       if(video) video.style.display = 'none';
-      if(overlay) { overlay.style.display = ''; overlay.style.pointerEvents = 'auto'; }
+      if(overlay) { overlay.style.display = ''; overlay.style.pointerEvents = 'auto'; overlay.width = (preview ? parseInt(preview.style.width) : video.clientWidth) || 640; overlay.height = (preview ? parseInt(preview.style.height) : video.clientHeight) || 360; }
     }catch(e){ console.warn('Failed to switch UI to framePreview', e); }
   // ensure nav buttons are enabled
   try{ if(prevFrameBtn) prevFrameBtn.disabled = false; if(nextFrameBtn) nextFrameBtn.disabled = false; if(frameROIBtn) frameROIBtn.disabled = false; }catch(e){}
@@ -467,12 +484,28 @@ function showFrame(idx){
   }catch(e){ console.warn('failed to update framePreview', e); }
 }
 
-// Rebind prev/next to click-only handlers with debug logging for reliability
+// Rebind prev/next with navigation guards: prevent multi-step jumps and stop propagation
 if(prevFrameBtn){
-  bindMulti(prevFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('prevFrame clicked, current', currentFrameIndex); mobileLog('◀ 클릭'); showFrame(currentFrameIndex-1); });
+  bindMulti(prevFrameBtn, (e)=>{
+    if(e && e.preventDefault) e.preventDefault(); if(e && e.stopPropagation) e.stopPropagation();
+    mobileLog('◀ 클릭'); console.log('prevFrame clicked, current', currentFrameIndex);
+    if(!extractedFrames || !extractedFrames.length){ mobileLog('이동할 프레임이 없습니다'); return; }
+    const now = Date.now(); if(now - lastNavTime < 250){ mobileLog('네비게이션 쿨다운 중'); return; }
+    lastNavTime = now;
+    const nextIdx = Math.max(0, currentFrameIndex - 1);
+    showFrame(nextIdx);
+  }, 300);
 }
 if(nextFrameBtn){
-  bindMulti(nextFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('nextFrame clicked, current', currentFrameIndex); mobileLog('▶ 클릭'); showFrame(currentFrameIndex+1); });
+  bindMulti(nextFrameBtn, (e)=>{
+    if(e && e.preventDefault) e.preventDefault(); if(e && e.stopPropagation) e.stopPropagation();
+    mobileLog('▶ 클릭'); console.log('nextFrame clicked, current', currentFrameIndex);
+    if(!extractedFrames || !extractedFrames.length){ mobileLog('이동할 프레임이 없습니다'); return; }
+    const now = Date.now(); if(now - lastNavTime < 250){ mobileLog('네비게이션 쿨다운 중'); return; }
+    lastNavTime = now;
+    const nextIdx = Math.min(extractedFrames.length - 1, currentFrameIndex + 1);
+    showFrame(nextIdx);
+  }, 300);
 }
 
 // extractFramesBtn binding is handled by bindExtractButton() above which supports click/pointer/touch events
