@@ -56,6 +56,53 @@ const extractProgress = $('extractProgress');
 const progressBar = $('progressBar');
 const progressText = $('progressText');
 
+// Additional UI elements (may be absent in some builds) — provide safe references
+const inspectModelBtn = $('inspectModelBtn');
+const modelFileInput = $('modelFileInput');
+const stepAnalyzeBtn = $('stepAnalyze');
+const runDetectBtn = $('runDetectBtn');
+const completeROIsBtn = $('completeROIs');
+const playResultsBtn = $('playResultsBtn');
+const exportCSVBtn = $('exportCSV');
+const frameROI = $('frameROI');
+const stepCamera = $('stepCamera');
+const stepExtract = $('stepExtract');
+const stepROI = $('stepROI');
+const stepAnalyze = $('stepAnalyze');
+const fpsInput = $('fpsInput');
+const confInput = $('confInput');
+const scaleInput = $('scaleInput');
+
+// Tab switching helper: shows tab 1..4
+function switchTab(n){
+  try{
+    const tabs = [1,2,3,4];
+    tabs.forEach(i=>{
+      const el = document.getElementById('tab-'+i);
+      const btn = document.getElementById('step'+(i===1? 'Camera': (i===2? 'Extract': (i===3? 'ROI':'Analyze'))));
+      if(el) el.style.display = (i===n) ? '' : 'none';
+      if(btn){ if(i===n) btn.classList.add('active'); else btn.classList.remove('active'); }
+    });
+  }catch(e){ console.warn('switchTab failed', e); }
+}
+
+// helper accessors for inputs with safe defaults
+function getFpsValue(){ return Math.max(1, Number(fpsInput && fpsInput.value) || 10); }
+function getConfValue(){ return Math.max(0, Math.min(1, Number(confInput && confInput.value) || 0.3)); }
+function getScaleValue(){ return Math.max(0.0001, Number(scaleInput && scaleInput.value) || 1); }
+
+// bind top tab buttons if present
+if(stepCamera) stepCamera.addEventListener('click', ()=>switchTab(1));
+if(stepExtract) stepExtract.addEventListener('click', ()=>switchTab(2));
+if(stepROI) stepROI.addEventListener('click', ()=>switchTab(3));
+if(stepAnalyze) stepAnalyze.addEventListener('click', ()=>switchTab(4));
+
+// Video diagnostics: log errors and loadeddata
+if(video){
+  video.addEventListener('error', (ev)=>{ console.error('[Traker] video element error', ev); userLog('비디오 엘리먼트 오류 발생 (콘솔 확인)'); });
+  video.addEventListener('loadeddata', ()=>{ console.log('[Traker] video loadeddata, readyState=', video.readyState); resizeOverlay(); });
+}
+
 // Small on-screen status (for users without console access)
 function userLog(msg){
   console.log('[Traker]', msg);
@@ -143,6 +190,8 @@ if(videoFile){
 
       // enable extract button
       if(extractFramesBtn) { extractFramesBtn.disabled = false; }
+      // automatically switch to extract tab so user can start extraction
+      try{ switchTab(2); }catch(e){}
     }catch(err){
       userLog('파일 처리 중 오류: ' + (err && err.message));
     }
