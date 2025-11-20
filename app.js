@@ -335,6 +335,21 @@ async function extractFrames(){
   const fps = getFpsValue();
   const duration = video.duration;
   const total = Math.max(1, Math.floor(duration * fps));
+  // Create a hidden capture video element clone to avoid UI/video rendering interference in some browsers
+  let captureVideo = video;
+  let cloneEl = null;
+  try{
+    cloneEl = document.createElement('video');
+    cloneEl.muted = true; cloneEl.playsInline = true; cloneEl.autoplay = false; cloneEl.controls = false;
+    // copy source
+    if(video.srcObject){ try{ cloneEl.srcObject = video.srcObject; }catch(e){} }
+    if(video.src){ cloneEl.src = video.src; }
+    // Position offscreen but attached so rendering works
+    cloneEl.style.position = 'absolute'; cloneEl.style.left = '-9999px'; cloneEl.style.top = '0px'; cloneEl.style.width = (video.videoWidth || video.clientWidth || 640) + 'px'; cloneEl.style.height = (video.videoHeight || video.clientHeight || 360) + 'px';
+    document.body.appendChild(cloneEl);
+    await new Promise(res=>{ cloneEl.addEventListener('loadedmetadata', ()=>res(), {once:true}); if(cloneEl.readyState>=2) res(); });
+    captureVideo = cloneEl;
+  }catch(e){ console.warn('capture video clone failed, falling back to visible video', e); captureVideo = video; if(cloneEl){ try{ cloneEl.remove(); }catch(_){} } }
   try{
     console.log('extractFrames start', {duration, fps, total});
     // Use the extract button itself as the progress indicator (mobile-friendly)
@@ -360,18 +375,18 @@ async function extractFrames(){
         extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 ${pctNum}%, #06b6d4 ${pctNum}%)`;
         try{ requestAnimationFrame(()=>{ extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 ${pctNum}%, #06b6d4 ${pctNum}%)`; }); }catch(e){}
       }
-      console.log(`seek to ${t.toFixed(3)}s (${i+1}/${total})`);
-        await seekToTime(t);
+  console.log(`seek to ${t.toFixed(3)}s (${i+1}/${total})`);
+  await seekToTime(t, captureVideo);
         console.log('after seekToTime resolved for target', t, 'video.currentTime=', video.currentTime);
       // Wait a frame (or requestVideoFrameCallback) to ensure the video renderer painted the new frame
       try{
-        if(typeof video.requestVideoFrameCallback === 'function'){
-          await new Promise(r=> video.requestVideoFrameCallback(()=>r()));
+        if(typeof captureVideo.requestVideoFrameCallback === 'function'){
+          await new Promise(r=> captureVideo.requestVideoFrameCallback(()=>r()));
         }else{
           await new Promise(r=> requestAnimationFrame(()=> setTimeout(r, 40)));
         }
       }catch(e){ /* swallow */ }
-        const c = captureFrameImage();
+      const c = captureFrameImage(captureVideo);
         console.log('captureFrameImage returned', c && c.width, 'x', c && c.height, 'for target', t);
       // store a copy canvas
       const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;
@@ -390,7 +405,7 @@ async function extractFrames(){
   if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
     // show frame navigation UI
     const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
-    // Switch UI from video playback to image-per-frame preview to avoid video element interfering with navigation
+  // Switch UI from video playback to image-per-frame preview to avoid video element interfering with navigation
     try{
       const preview = document.getElementById('framePreview');
       if(preview){ 
@@ -411,7 +426,9 @@ async function extractFrames(){
         overlay.width = parseInt(cssW) || 640; overlay.height = parseInt(cssH) || 360;
         overlay.style.width = cssW; overlay.style.height = cssH;
       }
-    }catch(e){ console.warn('Failed to switch UI to framePreview', e); }
+  }catch(e){ console.warn('Failed to switch UI to framePreview', e); }
+  // remove clone if created
+  try{ if(cloneEl){ cloneEl.pause(); cloneEl.removeAttribute('src'); cloneEl.src = ''; cloneEl.remove(); cloneEl = null; } }catch(e){}
   // ensure nav buttons are enabled
   try{ if(prevFrameBtn) prevFrameBtn.disabled = false; if(nextFrameBtn) nextFrameBtn.disabled = false; if(frameROIBtn) frameROIBtn.disabled = false; }catch(e){}
     currentFrameIndex = 0; showFrame(0);
@@ -829,18 +846,19 @@ async function analyzeWithYOLO(){
   analyzeTrackData();
 }
 
-function captureFrameImage(){
-  // draw video current frame to temp canvas and return canvas
+function captureFrameImage(videoEl){
+  // draw provided video element's current frame to temp canvas and return canvas
+  const src = videoEl || video;
   const tmp = document.createElement('canvas');
   // some browsers/devices can report video.videoWidth==0 intermittently; fall back to client sizes
-  const vw = video.videoWidth || Math.max(320, video.clientWidth);
-  const vh = video.videoHeight || Math.max(240, video.clientHeight);
+  const vw = (src && src.videoWidth) || Math.max(320, (src && src.clientWidth) || 320);
+  const vh = (src && src.videoHeight) || Math.max(240, (src && src.clientHeight) || 240);
   tmp.width = vw; tmp.height = vh;
   const tctx = tmp.getContext('2d');
   try{
-    tctx.drawImage(video, 0,0, tmp.width, tmp.height);
+    tctx.drawImage(src, 0,0, tmp.width, tmp.height);
   }catch(err){
-    console.warn('captureFrameImage drawImage failed, returning blank canvas', err);
+    console.warn('captureFrameImage drawImage failed, returning blank canvas', err, 'videoEl readyState=', src && src.readyState, 'videoWidth=', src && src.videoWidth, 'clientWidth=', src && src.clientWidth);
     tctx.fillStyle = 'rgb(100,100,100)'; tctx.fillRect(0,0,tmp.width,tmp.height);
   }
   return tmp;
@@ -956,26 +974,27 @@ function boxIoU(a,b){
   return inter / (aarea + barea - inter + 1e-6);
 }
 
-function seekToTime(t){
+function seekToTime(t, videoEl){
+  const src = videoEl || video;
   return new Promise((res,rej)=>{
     let done = false;
     const startMs = Date.now();
-    const clearAll = ()=>{ try{ video.removeEventListener('seeked', onseek); video.removeEventListener('timeupdate', ontime); if(typeof cancelVideoFrameCallback === 'function' && vidRVCId) cancelVideoFrameCallback(vidRVCId); }catch(e){} };
-    const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by seeked after', Date.now()-startMs,'ms, video.currentTime=',video.currentTime); res(); };
-    const ontime = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by timeupdate after', Date.now()-startMs,'ms, video.currentTime=',video.currentTime); res(); };
+    const clearAll = ()=>{ try{ src.removeEventListener('seeked', onseek); src.removeEventListener('timeupdate', ontime); if(typeof cancelVideoFrameCallback === 'function' && vidRVCId) cancelVideoFrameCallback(vidRVCId); }catch(e){} };
+    const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by seeked after', Date.now()-startMs,'ms, video.currentTime=',src.currentTime); res(); };
+    const ontime = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by timeupdate after', Date.now()-startMs,'ms, video.currentTime=',src.currentTime); res(); };
     // If requestVideoFrameCallback is available, use it as a fast reliable hook (newer Safari)
     let vidRVCId = null;
-    const useRVC = (typeof video.requestVideoFrameCallback === 'function');
+    const useRVC = (typeof src.requestVideoFrameCallback === 'function');
     if(useRVC){
       try{
-        vidRVCId = video.requestVideoFrameCallback(()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by requestVideoFrameCallback after', Date.now()-startMs,'ms, video.currentTime=',video.currentTime); res(); });
+        vidRVCId = src.requestVideoFrameCallback(()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by requestVideoFrameCallback after', Date.now()-startMs,'ms, video.currentTime=',src.currentTime); res(); });
       }catch(e){ console.warn('requestVideoFrameCallback failed', e); }
     }
-    video.addEventListener('seeked', onseek);
-    video.addEventListener('timeupdate', ontime);
+    src.addEventListener('seeked', onseek);
+    src.addEventListener('timeupdate', ontime);
     try{ 
-      console.log('seekToTime setting currentTime to', Math.min(video.duration || t, t), 'readyState=', video.readyState, 'video.videoWidth=', video.videoWidth, 'video.videoHeight=', video.videoHeight);
-      video.currentTime = Math.min(video.duration || t, t);
+      console.log('seekToTime setting currentTime to', Math.min(src.duration || t, t), 'readyState=', src.readyState, 'videoWidth=', src.videoWidth, 'videoHeight=', src.videoHeight);
+      src.currentTime = Math.min(src.duration || t, t);
     }catch(err){ console.warn('seekToTime set currentTime failed', err); }
     // fallback: if neither event fired within 3000ms, resolve anyway to avoid stalling on slow mobile
     const timer = setTimeout(()=>{ if(done) return; done = true; clearAll(); console.warn('seekToTime fallback timeout for', t); res(); }, 3000);
