@@ -76,6 +76,22 @@ function switchTab(n){
 // default to tab 1
 switchTab(1);
 
+// Helper: restore video view (show video + overlay, hide framePreview)
+function restoreVideoView(){
+  try{
+    const preview = document.getElementById('framePreview'); if(preview) preview.style.display = 'none';
+    if(video) video.style.display = '';
+    if(overlay) overlay.style.display = '';
+  }catch(e){ console.warn('restoreVideoView failed', e); }
+}
+
+// Ensure .video-wrap and overlay are positioned for absolute preview + canvas overlay
+try{
+  const vwWrap = document.querySelector('.video-wrap');
+  if(vwWrap) vwWrap.style.position = 'relative';
+  if(overlay){ overlay.style.position = 'absolute'; overlay.style.left = '0'; overlay.style.top = '0'; overlay.style.zIndex = '3'; }
+}catch(e){ console.warn('video-wrap/overlay init failed', e); }
+
 // When tab 2 becomes visible, ensure extract button is enabled when a video source exists
 function onTabShown(n){
   if(n===2){
@@ -236,6 +252,8 @@ if(stepCameraBtn){
   stepCameraBtn.addEventListener('click', ()=>{
     // switch to camera tab content and trigger camera/file UI
     switchTab(1);
+    // restore video view when returning to camera tab
+    restoreVideoView();
     // prefer camera if available, else open file selector
     if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
       // show record button
@@ -346,6 +364,14 @@ async function extractFrames(){
     if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
     // show frame navigation UI
     const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
+    // Switch UI from video playback to image-per-frame preview to avoid video element interfering with navigation
+    try{
+      const preview = document.getElementById('framePreview');
+      if(preview){ preview.style.display = ''; }
+      // hide native video to prevent user confusing playback; keep overlay visible so ROI selection can work on top
+      if(video) video.style.display = 'none';
+      if(overlay) { overlay.style.display = ''; overlay.style.pointerEvents = 'auto'; }
+    }catch(e){ console.warn('Failed to switch UI to framePreview', e); }
   // ensure nav buttons are enabled
   try{ if(prevFrameBtn) prevFrameBtn.disabled = false; if(nextFrameBtn) nextFrameBtn.disabled = false; if(frameROIBtn) frameROIBtn.disabled = false; }catch(e){}
     currentFrameIndex = 0; showFrame(0);
@@ -412,8 +438,10 @@ function showFrame(idx){
   currentFrameIndex = Math.max(0, Math.min(idx, extractedFrames.length-1));
   const c = extractedFrames[currentFrameIndex];
   // draw frame into overlay sized to the visible video area
-  const displayW = video.clientWidth || overlay.clientWidth || 640;
-  const displayH = video.clientHeight || overlay.clientHeight || 360;
+  // Prefer preview image size when present (we hide the video element after extraction)
+  const previewEl = document.getElementById('framePreview');
+  const displayW = (previewEl && previewEl.clientWidth) || video.clientWidth || overlay.clientWidth || 640;
+  const displayH = (previewEl && previewEl.clientHeight) || video.clientHeight || overlay.clientHeight || 360;
   overlay.width = displayW;
   overlay.height = displayH;
   const drawCtx = overlay.getContext('2d');
@@ -437,6 +465,9 @@ function showFrame(idx){
     const prev = document.getElementById('framePreview');
     if(prev){
       prev.src = c.toDataURL('image/png');
+      // size preview to match overlay area so coordinates align
+      prev.style.width = overlay.width + 'px';
+      prev.style.height = overlay.height + 'px';
       prev.style.display = '';
     }
   }catch(e){ console.warn('failed to update framePreview', e); }
