@@ -362,16 +362,25 @@ async function extractFrames(){
       }
       console.log(`seek to ${t.toFixed(3)}s (${i+1}/${total})`);
       await seekToTime(t);
+      // Wait a frame (or requestVideoFrameCallback) to ensure the video renderer painted the new frame
+      try{
+        if(typeof video.requestVideoFrameCallback === 'function'){
+          await new Promise(r=> video.requestVideoFrameCallback(()=>r()));
+        }else{
+          await new Promise(r=> requestAnimationFrame(()=> setTimeout(r, 40)));
+        }
+      }catch(e){ /* swallow */ }
       const c = captureFrameImage();
       // store a copy canvas
       const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;
       copy.getContext('2d').drawImage(c,0,0);
-      extractedFrames.push(copy);
+  extractedFrames.push(copy);
+  // small yield
       // small yield
       await new Promise(r=>setTimeout(r,10));
     }
     progressText.textContent = `추출 완료: ${extractedFrames.length} frames`;
-    if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
+  if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
     // show frame navigation UI
     const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
     // Switch UI from video playback to image-per-frame preview to avoid video element interfering with navigation
@@ -382,13 +391,19 @@ async function extractFrames(){
         const wrap = document.querySelector('.video-wrap');
         const targetW = video.clientWidth || video.videoWidth || (wrap && wrap.clientWidth) || 640;
         const targetH = video.clientHeight || video.videoHeight || (wrap && wrap.clientHeight) || 360;
-  preview.style.width = targetW + 'px'; preview.style.height = targetH + 'px';
-  preview.style.pointerEvents = 'none';
-  preview.style.display = '';
+        preview.style.width = targetW + 'px'; preview.style.height = targetH + 'px';
+        preview.style.pointerEvents = 'none';
+        preview.style.display = '';
       }
       // hide native video to prevent user confusing playback; keep overlay visible so ROI selection can work on top
       if(video) video.style.display = 'none';
-      if(overlay) { overlay.style.display = ''; overlay.style.pointerEvents = 'auto'; overlay.width = (preview ? parseInt(preview.style.width) : video.clientWidth) || 640; overlay.height = (preview ? parseInt(preview.style.height) : video.clientHeight) || 360; }
+      if(overlay) { 
+        overlay.style.display = ''; overlay.style.pointerEvents = 'auto'; 
+        const cssW = (preview && preview.style.width) ? preview.style.width : (video.clientWidth ? video.clientWidth + 'px' : '640px');
+        const cssH = (preview && preview.style.height) ? preview.style.height : (video.clientHeight ? video.clientHeight + 'px' : '360px');
+        overlay.width = parseInt(cssW) || 640; overlay.height = parseInt(cssH) || 360;
+        overlay.style.width = cssW; overlay.style.height = cssH;
+      }
     }catch(e){ console.warn('Failed to switch UI to framePreview', e); }
   // ensure nav buttons are enabled
   try{ if(prevFrameBtn) prevFrameBtn.disabled = false; if(nextFrameBtn) nextFrameBtn.disabled = false; if(frameROIBtn) frameROIBtn.disabled = false; }catch(e){}
@@ -455,6 +470,11 @@ function showFrame(idx){
   const displayH = (previewEl && previewEl.clientHeight) || video.clientHeight || overlay.clientHeight || 360;
   overlay.width = displayW;
   overlay.height = displayH;
+  // ensure CSS size matches canvas internal pixels so overlay aligns with preview image
+  try{
+    overlay.style.width = displayW + 'px';
+    overlay.style.height = displayH + 'px';
+  }catch(e){}
   const drawCtx = overlay.getContext('2d');
   drawCtx.clearRect(0,0,overlay.width,overlay.height);
   // scale image to overlay size
