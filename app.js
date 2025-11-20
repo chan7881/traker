@@ -219,6 +219,8 @@ async function extractFrames(){
     if(extractFramesBtn){
       extractFramesBtn.disabled = true;
       extractFramesBtn.dataset.origText = extractFramesBtn.innerHTML;
+      // immediately show simple '추출중' status when extraction begins
+      extractFramesBtn.textContent = '추출중';
       // Make sure button uses block layout on narrow devices
       extractFramesBtn.style.display = 'inline-block';
       extractFramesBtn.style.transition = 'background 120ms linear';
