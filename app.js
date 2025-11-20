@@ -207,19 +207,34 @@ async function extractFrames(){
   }
   if(!video.duration || isNaN(video.duration) || video.duration===0){ alert('비디오 정보를 불러오지 못했습니다. 다른 파일을 시도하세요.'); return; }
   extractedFrames = [];
+  // For stability on mobile, pause playback before performing many seeks
+  try{ video.pause(); }catch(e){ console.warn('video.pause() failed', e); }
   const fps = getFpsValue();
   const duration = video.duration;
   const total = Math.max(1, Math.floor(duration * fps));
   try{
     console.log('extractFrames start', {duration, fps, total});
-    if(extractProgress) extractProgress.style.display = '';
-    if(progressBar) progressBar.style.width = '0%';
-    if(progressText) progressText.textContent = `프레임 추출: 0 / ${total}`;
-    if(extractFramesBtn) extractFramesBtn.disabled = true;
+    // Use the extract button itself as the progress indicator (mobile-friendly)
+    if(extractProgress) extractProgress.style.display = 'none'; // hide original bar
+    if(extractFramesBtn){
+      extractFramesBtn.disabled = true;
+      extractFramesBtn.dataset.origText = extractFramesBtn.innerHTML;
+      // Make sure button uses block layout on narrow devices
+      extractFramesBtn.style.display = 'inline-block';
+      extractFramesBtn.style.transition = 'background 120ms linear';
+    }
     for(let i=0;i<total;i++){
     const t = i / fps;
+      const pctNum = Math.round(((i+1)/total)*100);
       if(progressText) progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
-      if(progressBar) progressBar.style.width = `${Math.round(((i+1)/total)*100)}%`;
+      // Update extract button visually to show progress
+      if(extractFramesBtn){
+        const txt = `추출중 ${i+1}/${total} (${pctNum}%)`;
+        extractFramesBtn.textContent = txt;
+        // visual fill using linear-gradient background (left: progress colour, right: base)
+        extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 ${pctNum}%, #06b6d4 ${pctNum}%)`;
+        try{ requestAnimationFrame(()=>{ extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 ${pctNum}%, #06b6d4 ${pctNum}%)`; }); }catch(e){}
+      }
       console.log(`seek to ${t.toFixed(3)}s (${i+1}/${total})`);
       await seekToTime(t);
       const c = captureFrameImage();
@@ -231,13 +246,16 @@ async function extractFrames(){
       await new Promise(r=>setTimeout(r,10));
     }
     progressText.textContent = `추출 완료: ${extractedFrames.length} frames`;
-    progressBar.style.width = '100%';
+    if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
     // show frame navigation UI
     const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
     currentFrameIndex = 0; showFrame(0);
     if(stepROIBtn) stepROIBtn.disabled = false;
     if(stepExtractBtn) stepExtractBtn.disabled = true;
-    if(extractFramesBtn) extractFramesBtn.disabled = false;
+    if(extractFramesBtn) {
+      // restore button after a short pause so user sees completion
+      setTimeout(()=>{ extractFramesBtn.disabled = false; if(extractFramesBtn.dataset.origText) extractFramesBtn.innerHTML = extractFramesBtn.dataset.origText; extractFramesBtn.style.background = ''; }, 1200);
+    }
   }catch(err){
     console.error('extractFrames failed', err);
     alert('프레임 추출 중 오류가 발생했습니다. 콘솔을 확인하세요.');
@@ -769,8 +787,8 @@ function seekToTime(t){
     const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); video.removeEventListener('seeked', onseek); res(); };
     video.addEventListener('seeked', onseek);
     try{ video.currentTime = Math.min(video.duration || t, t); }catch(err){ console.warn('seekToTime set currentTime failed', err); }
-    // fallback: if seeked doesn't fire within 1200ms, resolve anyway to avoid stalling
-    const timer = setTimeout(()=>{ if(done) return; done = true; video.removeEventListener('seeked', onseek); console.warn('seekToTime fallback timeout for', t); res(); }, 1200);
+    // fallback: if seeked doesn't fire within 2000ms (mobile may be slower), resolve anyway to avoid stalling
+    const timer = setTimeout(()=>{ if(done) return; done = true; video.removeEventListener('seeked', onseek); console.warn('seekToTime fallback timeout for', t); res(); }, 2000);
   });
 }
 
