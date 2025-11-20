@@ -55,6 +55,9 @@ let extractedFrames = []; // array of canvas images
 let currentFrameIndex = 0;
 let frameROIs = {}; // map frameIndex -> {x,y,w,h}
 
+// Extraction guard (declare early to avoid TDZ when handlers fire quickly)
+let isExtracting = false;
+
 // Simplify initial UI: disable steps until prerequisites
 if(stepExtractBtn) stepExtractBtn.disabled = true;
 if(stepROIBtn) stepROIBtn.disabled = true;
@@ -285,7 +288,7 @@ function stopCameraStream(){
   currentStream = null;
 }
 
-captureFrameBtn.addEventListener('click', ()=>{
+if(captureFrameBtn) captureFrameBtn.addEventListener('click', ()=>{
   // draw current frame to overlay for user to save/view
   drawOverlay();
 });
@@ -370,7 +373,7 @@ if(stepCameraBtn) stepCameraBtn.addEventListener('click', ()=>{ switchTab(1); })
 const stepAnalyzeHeader = document.getElementById('stepAnalyze');
 if(stepAnalyzeHeader) stepAnalyzeHeader.addEventListener('click', ()=>{ switchTab(4); });
 
-selectROIBtn.addEventListener('click', ()=>{
+if(selectROIBtn) selectROIBtn.addEventListener('click', ()=>{
   selecting = true;
   roi = null;
   alert('영역을 화면에서 터치하거나 마우스로 드래그하여 선택하세요. 완료되면 다시 ROI 버튼을 누르세요.');
@@ -637,7 +640,7 @@ if(inspectModelBtn){
     }, 1000 / fps);
   }
 
-runDetectBtn.addEventListener('click', async ()=>{
+if(runDetectBtn) runDetectBtn.addEventListener('click', async ()=>{
   if(!modelLoaded){
     if(!confirm('YOLO 모델이 로드되지 않았습니다. 계속해서 ROI 기반 수동 분석을 수행하시겠습니까?')) return;
     analyzeByROI();
@@ -906,8 +909,7 @@ function analyzeTrackData(){
 }
 
 let analysisResult = null;
-// Extraction guard
-let isExtracting = false;
+// Extraction guard (declared earlier)
 
 // On-screen mobile status log (useful for Safari where user may not have console)
 function mobileLog(msg){
@@ -957,9 +959,8 @@ exportCSVBtn.addEventListener('click', ()=>{
 // Utility: map overlay coords to video coords and vice versa used above
 
 // Accessibility: reload model button via double-click on title
-document.querySelector('header h1').addEventListener('dblclick', ()=>{
-  if(confirm('모델을 다시 로드하시겠습니까?')) loadModel();
-});
+const _hdrTitle = document.querySelector('header h1');
+if(_hdrTitle) _hdrTitle.addEventListener('dblclick', ()=>{ if(confirm('모델을 다시 로드하시겠습니까?')) loadModel(); });
 
 // Initial overlay draw loop
 setInterval(()=>{ drawOverlay(); }, 200);
