@@ -361,7 +361,8 @@ async function extractFrames(){
         try{ requestAnimationFrame(()=>{ extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 ${pctNum}%, #06b6d4 ${pctNum}%)`; }); }catch(e){}
       }
       console.log(`seek to ${t.toFixed(3)}s (${i+1}/${total})`);
-      await seekToTime(t);
+        await seekToTime(t);
+        console.log('after seekToTime resolved for target', t, 'video.currentTime=', video.currentTime);
       // Wait a frame (or requestVideoFrameCallback) to ensure the video renderer painted the new frame
       try{
         if(typeof video.requestVideoFrameCallback === 'function'){
@@ -370,7 +371,8 @@ async function extractFrames(){
           await new Promise(r=> requestAnimationFrame(()=> setTimeout(r, 40)));
         }
       }catch(e){ /* swallow */ }
-      const c = captureFrameImage();
+        const c = captureFrameImage();
+        console.log('captureFrameImage returned', c && c.width, 'x', c && c.height, 'for target', t);
       // store a copy canvas
       const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;
       copy.getContext('2d').drawImage(c,0,0);
@@ -957,20 +959,24 @@ function boxIoU(a,b){
 function seekToTime(t){
   return new Promise((res,rej)=>{
     let done = false;
+    const startMs = Date.now();
     const clearAll = ()=>{ try{ video.removeEventListener('seeked', onseek); video.removeEventListener('timeupdate', ontime); if(typeof cancelVideoFrameCallback === 'function' && vidRVCId) cancelVideoFrameCallback(vidRVCId); }catch(e){} };
-    const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); res(); };
-    const ontime = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); res(); };
+    const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by seeked after', Date.now()-startMs,'ms, video.currentTime=',video.currentTime); res(); };
+    const ontime = ()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by timeupdate after', Date.now()-startMs,'ms, video.currentTime=',video.currentTime); res(); };
     // If requestVideoFrameCallback is available, use it as a fast reliable hook (newer Safari)
     let vidRVCId = null;
     const useRVC = (typeof video.requestVideoFrameCallback === 'function');
     if(useRVC){
       try{
-        vidRVCId = video.requestVideoFrameCallback(()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); res(); });
+        vidRVCId = video.requestVideoFrameCallback(()=>{ if(done) return; done = true; clearTimeout(timer); clearAll(); console.log('seekToTime resolved by requestVideoFrameCallback after', Date.now()-startMs,'ms, video.currentTime=',video.currentTime); res(); });
       }catch(e){ console.warn('requestVideoFrameCallback failed', e); }
     }
     video.addEventListener('seeked', onseek);
     video.addEventListener('timeupdate', ontime);
-    try{ video.currentTime = Math.min(video.duration || t, t); }catch(err){ console.warn('seekToTime set currentTime failed', err); }
+    try{ 
+      console.log('seekToTime setting currentTime to', Math.min(video.duration || t, t), 'readyState=', video.readyState, 'video.videoWidth=', video.videoWidth, 'video.videoHeight=', video.videoHeight);
+      video.currentTime = Math.min(video.duration || t, t);
+    }catch(err){ console.warn('seekToTime set currentTime failed', err); }
     // fallback: if neither event fired within 3000ms, resolve anyway to avoid stalling on slow mobile
     const timer = setTimeout(()=>{ if(done) return; done = true; clearAll(); console.warn('seekToTime fallback timeout for', t); res(); }, 3000);
   });
