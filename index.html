@@ -48,6 +48,10 @@
           <button id="nextFrame">▶</button>
           <button id="frameROI" class="small">이 프레임 ROI 선택</button>
         </div>
+        <!-- Frame preview: show extracted frame images here to avoid overlay-driven interaction issues -->
+        <div style="margin-top:8px">
+          <img id="framePreview" alt="frame preview" style="max-width:100%;display:none;border:1px solid #ddd;border-radius:6px" />
+        </div>
       </div>
 
       <div class="tab-content" id="tab-3" style="display:none">

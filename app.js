@@ -432,10 +432,25 @@ function showFrame(idx){
   }
   // update index label
   if(frameIdxEl) frameIdxEl.textContent = `Frame ${currentFrameIndex+1} / ${extractedFrames.length}`;
+  // Also update the dedicated preview <img> if present to avoid overlay interaction issues
+  try{
+    const prev = document.getElementById('framePreview');
+    if(prev){
+      prev.src = c.toDataURL('image/png');
+      prev.style.display = '';
+    }
+  }catch(e){ console.warn('failed to update framePreview', e); }
 }
 
-if(prevFrameBtn) prevFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex-1); });
-if(nextFrameBtn) nextFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex+1); });
+// Rebind prev/next to click-only handlers with debug logging for reliability
+if(prevFrameBtn){
+  prevFrameBtn.removeEventListener('click', ()=>{});
+  prevFrameBtn.addEventListener('click', (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('prevFrame clicked, current', currentFrameIndex); mobileLog('◀ 클릭'); showFrame(currentFrameIndex-1); });
+}
+if(nextFrameBtn){
+  nextFrameBtn.removeEventListener('click', ()=>{});
+  nextFrameBtn.addEventListener('click', (e)=>{ if(e && e.preventDefault) e.preventDefault(); console.log('nextFrame clicked, current', currentFrameIndex); mobileLog('▶ 클릭'); showFrame(currentFrameIndex+1); });
+}
 
 // extractFramesBtn binding is handled by bindExtractButton() above which supports click/pointer/touch events
 
