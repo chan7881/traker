@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Motion Tracker (YOLO ONNX)</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Motion Tracker</h1>
+      <p class="subtitle">동영상에서 물체를 지정해 운동을 분석합니다. (모바일 지원)</p>
+    </header>
+
+    <section class="controls">
+      <div class="row">
+        <label class="file-btn">
+          영상 업로드
+          <input id="videoFile" type="file" accept="video/*" />
+        </label>
+        <button id="startCamera">카메라 열기</button>
+        <button id="captureFrame">프레임 추출</button>
+      </div>
+
+      <div class="row">
+        <button id="selectROI">ROI 선택</button>
+        <button id="runDetect">YOLO 분석 실행</button>
+        <button id="exportCSV">CSV 내보내기</button>
+      </div>
+
+      <div class="row small">
+        <label>FPS: <input id="fpsInput" type="number" value="30" min="1" max="240"></label>
+        <label>신뢰도 임계값: <input id="confInput" type="number" value="0.3" step="0.05" min="0" max="1"></label>
+        <label>스케일(픽셀→실제): <input id="scaleInput" type="number" value="1" step="0.01"></label>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="video-wrap">
+        <video id="video" playsinline controls></video>
+        <canvas id="overlay"></canvas>
+      </div>
+
+      <aside class="analysis">
+        <h3>분석</h3>
+        <div id="charts">
+          <canvas id="posChart"></canvas>
+          <canvas id="velChart"></canvas>
+        </div>
+      </aside>
+    </section>
+
+    <footer>
+      <small>모델 파일은 <code>model/yolov8n.onnx</code> 위치에 두세요. 로컬에서 실행할 때는 간단한 HTTP 서버로 제공해야 합니다.</small>
+    </footer>
+  </main>
+
+  <!-- Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
