@@ -14,6 +14,36 @@ const video = $('video');
 const overlay = $('overlay');
 const framePreview = $('framePreview');
 
+// Ensure commonly used globals exist with safe defaults (prevents ReferenceErrors)
+let modelSession = null;
+let modelLoaded = false;
+let detectionsPerFrame = [];
+let frameROIs = [];
+let roi = null;
+let posChart = null;
+let velChart = null;
+let scalePxPerUnit = 100; // px per unit default (user can override in UI)
+let lastNavTime = 0;
+
+// Minimal bindMulti fallback if not provided elsewhere. Adds basic click + pointer support and optional cooldown.
+function bindMulti(el, handler, cooldownMs){
+  if(!el) return;
+  let last = 0;
+  const wrapper = function(e){
+    const now = Date.now();
+    if(cooldownMs && now - last < cooldownMs) return;
+    last = now;
+    try{ handler(e); }catch(err){ console.warn('bindMulti handler error', err); }
+  };
+  el.addEventListener('click', wrapper);
+  el.addEventListener('pointerdown', wrapper);
+}
+
+// Make video element autoplay-friendly and visible when available
+if(video){
+  try{ video.playsInline = true; video.muted = true; video.controls = true; video.style.display = video.style.display || 'block'; }catch(e){}
+}
+
 // Controls
 const videoFile = $('videoFile');
 const startCameraBtn = $('startCamera');
@@ -87,19 +117,29 @@ if(videoFile){
 
       const url = URL.createObjectURL(f);
       // prefer setting srcObject to null first
-      video.srcObject = null;
-      video.src = url;
-      video.muted = false;
+      if(video){
+        video.srcObject = null;
+        video.src = url;
+        // make sure video is visible/controls enabled
+        try{ video.style.display = video.style.display || 'block'; video.playsInline = true; video.muted = false; video.controls = true; }catch(e){}
+        console.log('[Traker] set video.src ->', url);
+      }
 
-      // Wait for metadata to be ready
+      // Wait for metadata to be ready (or fallback after timeout)
       await new Promise((res,rej)=>{
-        const t = setTimeout(()=>{ res(); }, 3000);
+        if(!video){ return res(); }
+        const t = setTimeout(()=>{ console.warn('[Traker] loadedmetadata timeout'); res(); }, 3000);
         function onMeta(){ clearTimeout(t); video.removeEventListener('loadedmetadata', onMeta); res(); }
         video.addEventListener('loadedmetadata', onMeta, {once:true});
       });
 
-      userLog(`비디오 로드 완료: ${Math.round(video.duration||0)}초, ${video.videoWidth}x${video.videoHeight}`);
-      try{ await video.play(); }catch(e){ userLog('자동 재생 실패(사용자 상호작용 필요)'); }
+      // Log state and attempt play (may be blocked by browser autoplay policies)
+      try{
+        userLog(`비디오 로드 완료: ${Math.round(video.duration||0)}초, ${video.videoWidth}x${video.videoHeight}`);
+        console.log('[Traker] video readyState, duration, src:', video.readyState, video.duration, video.currentSrc || video.src);
+        await video.play();
+        console.log('[Traker] video.play() succeeded');
+      }catch(e){ userLog('자동 재생 실패(사용자 상호작용 필요)'); console.warn('video.play error', e); }
 
       // enable extract button
       if(extractFramesBtn) { extractFramesBtn.disabled = false; }
@@ -117,8 +157,9 @@ if(startCameraBtn){
     try{
       const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
       currentStream = s; video.srcObject = s; video.muted = true;
-      await video.play().catch(()=>{});
+      try{ video.playsInline = true; video.controls = false; await video.play(); }catch(e){ console.warn('camera video.play failed', e); }
       userLog('카메라 스트림 재생 중');
+      console.log('[Traker] camera stream tracks:', s.getTracks().map(t=>t.kind+':'+t.readyState));
       if(recordToggleBtn){ recordToggleBtn.style.display = ''; recordToggleBtn.disabled = false; }
     }catch(err){ userLog('카메라 접근 실패: '+ err.message); alert('카메라 접근 실패: '+err.message); }
   });
