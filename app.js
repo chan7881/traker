@@ -487,41 +487,44 @@ function showFrame(idx){
   if(!extractedFrames || !extractedFrames.length) return;
   currentFrameIndex = Math.max(0, Math.min(idx, extractedFrames.length-1));
   const c = extractedFrames[currentFrameIndex];
-  // draw frame into overlay sized to the visible video area
+  // draw frame into overlay sized to the visible video area (DPI-aware)
   // Prefer preview image size when present (we hide the video element after extraction)
   const previewEl = document.getElementById('framePreview');
   const displayW = (previewEl && previewEl.clientWidth) || video.clientWidth || overlay.clientWidth || 640;
   const displayH = (previewEl && previewEl.clientHeight) || video.clientHeight || overlay.clientHeight || 360;
-  overlay.width = displayW;
-  overlay.height = displayH;
-  // If computed display sizes are zero (some browsers report client sizes as 0 when element hidden),
-  // fall back to the canvas native size so content is visible.
-  if(!overlay.width || !overlay.height){
-    try{
-      overlay.width = c.width || 640;
-      overlay.height = c.height || 360;
-      overlay.style.width = (overlay.width)+'px';
-      overlay.style.height = (overlay.height)+'px';
-    }catch(e){}
-  }
-  // ensure CSS size matches canvas internal pixels so overlay aligns with preview image
-  try{
-    overlay.style.width = displayW + 'px';
-    overlay.style.height = displayH + 'px';
-  }catch(e){}
+  const dpr = window.devicePixelRatio || 1;
+
+  // Set canvas internal pixel size to CSS size * devicePixelRatio, but keep CSS size unchanged
+  overlay.width = Math.max(1, Math.round(displayW * dpr));
+  overlay.height = Math.max(1, Math.round(displayH * dpr));
+  overlay.style.width = displayW + 'px';
+  overlay.style.height = displayH + 'px';
+
   const drawCtx = overlay.getContext('2d');
+  // Reset any transform then scale to DPR so drawing commands use CSS pixels
+  try{ drawCtx.setTransform(1,0,0,1,0,0); }catch(e){}
   drawCtx.clearRect(0,0,overlay.width,overlay.height);
-  // scale image to overlay size
-  drawCtx.drawImage(c, 0,0, c.width, c.height, 0,0, overlay.width, overlay.height);
+  drawCtx.setTransform(dpr,0,0,dpr,0,0);
+
+  // scale image to overlay CSS size (context is already scaled by DPR)
+  const scaleX = displayW / (c.width || displayW);
+  const scaleY = displayH / (c.height || displayH);
+  drawCtx.imageSmoothingEnabled = true;
+  try{
+    drawCtx.drawImage(c, 0,0, c.width, c.height, 0,0, displayW, displayH);
+  }catch(e){
+    console.warn('showFrame drawImage failed', e, 'canvas:', c.width, c.height, 'display:', displayW, displayH);
+  }
   // if ROI exists for this frame, draw it
   const roiObj = frameROIs[currentFrameIndex];
   if(roiObj){
-    // scale stored ROI (stored in original canvas coords) to overlay display
-    const sx = roiObj.x * (overlay.width / c.width);
-    const sy = roiObj.y * (overlay.height / c.height);
-    const sw = roiObj.w * (overlay.width / c.width);
-    const sh = roiObj.h * (overlay.height / c.height);
-    drawCtx.strokeStyle='#00ff88'; drawCtx.lineWidth=2; drawCtx.strokeRect(sx, sy, sw, sh);
+    // scale stored ROI (stored in original canvas coords) to overlay display (use CSS pixel scales)
+    const sx = roiObj.x * scaleX;
+    const sy = roiObj.y * scaleY;
+    const sw = roiObj.w * scaleX;
+    const sh = roiObj.h * scaleY;
+    drawCtx.strokeStyle='#00ff88'; drawCtx.lineWidth=2; drawCtx.setLineDash([6,4]); drawCtx.strokeRect(sx, sy, sw, sh);
+    drawCtx.setLineDash([]);
   }
   // update index label
   if(frameIdxEl) frameIdxEl.textContent = `Frame ${currentFrameIndex+1} / ${extractedFrames.length}`;
@@ -529,10 +532,11 @@ function showFrame(idx){
   try{
     const prev = document.getElementById('framePreview');
     if(prev){
+      // Use the canvas dataURL; set CSS size to display pixels so it visually matches overlay
       prev.src = c.toDataURL('image/png');
-      // size preview to match overlay area so coordinates align
-      prev.style.width = overlay.width + 'px';
-      prev.style.height = overlay.height + 'px';
+      prev.style.width = displayW + 'px';
+      prev.style.height = displayH + 'px';
+      prev.style.objectFit = prev.style.objectFit || 'contain';
       prev.style.display = '';
       prev.style.visibility = 'visible';
       try{ overlay.style.visibility = 'visible'; }catch(e){}
@@ -572,18 +576,24 @@ if(completeROIsBtn){ bindMulti(completeROIsBtn, (e)=>{ if(e && e.preventDefault)
 if(playResultsBtn){ bindMulti(playResultsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); playResults(); switchTab(4); }); }
 
 function drawOverlay(){
-  ctx.clearRect(0,0,overlay.width,overlay.height);
+  // Ensure context is DPR-aware and drawing uses CSS pixel coordinates
+  const dpr = window.devicePixelRatio || 1;
+  const _ctx = overlay.getContext('2d');
+  try{ _ctx.setTransform(1,0,0,1,0,0); }catch(e){}
+  _ctx.clearRect(0,0,overlay.width,overlay.height);
+  _ctx.setTransform(dpr,0,0,dpr,0,0);
+
   if(roi){
-    ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
-    ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+    _ctx.strokeStyle = '#00ff88'; _ctx.lineWidth = 2; _ctx.setLineDash([6,4]);
+    _ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+    _ctx.setLineDash([]);
   }
   // draw latest detection for current frame if any
   const last = detectionsPerFrame.length ? detectionsPerFrame[detectionsPerFrame.length-1] : null;
   if(last && last.box){
-    ctx.setLineDash([]);
-    ctx.strokeStyle = '#ff0066'; ctx.lineWidth = 2;
+    _ctx.strokeStyle = '#ff0066'; _ctx.lineWidth = 2;
     const [x1,y1,x2,y2] = mapBoxToOverlay(last.box);
-    ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+    _ctx.strokeRect(x1,y1,x2-x1,y2-y1);
   }
 }
 
@@ -751,12 +761,28 @@ if(inspectModelBtn){
     if(playTimer) clearInterval(playTimer);
     playTimer = setInterval(()=>{
       const c = extractedFrames[idx];
+      const displayW = video.clientWidth || overlay.clientWidth || 640;
+      const displayH = video.clientHeight || overlay.clientHeight || 360;
+      const dpr = window.devicePixelRatio || 1;
+
+      overlay.width = Math.max(1, Math.round(displayW * dpr));
+      overlay.height = Math.max(1, Math.round(displayH * dpr));
+      overlay.style.width = displayW + 'px'; overlay.style.height = displayH + 'px';
+
       const drawCtx = overlay.getContext('2d');
-      overlay.width = video.clientWidth; overlay.height = video.clientHeight;
+      try{ drawCtx.setTransform(1,0,0,1,0,0); }catch(e){}
       drawCtx.clearRect(0,0,overlay.width,overlay.height);
-      drawCtx.drawImage(c,0,0, overlay.width, overlay.height);
+      drawCtx.setTransform(dpr,0,0,dpr,0,0);
+
+      try{ drawCtx.drawImage(c,0,0, c.width, c.height, 0,0, displayW, displayH); }catch(e){ console.warn('playResults drawImage failed', e); }
       const det = detectionsPerFrame[idx];
-      if(det && det.box){ const [x1,y1,x2,y2]=det.box; const sx = x1*(overlay.width/c.width), sy=y1*(overlay.height/c.height), sw=(x2-x1)*(overlay.width/c.width), sh=(y2-y1)*(overlay.height/c.height); drawCtx.strokeStyle='#ff0066'; drawCtx.lineWidth=3; drawCtx.strokeRect(sx,sy,sw,sh); }
+      if(det && det.box){
+        const [x1,y1,x2,y2] = det.box;
+        const scaleX = displayW / (c.width || displayW);
+        const scaleY = displayH / (c.height || displayH);
+        const sx = x1 * scaleX, sy = y1 * scaleY, sw = (x2-x1) * scaleX, sh = (y2-y1) * scaleY;
+        drawCtx.strokeStyle='#ff0066'; drawCtx.lineWidth=3; drawCtx.strokeRect(sx,sy,sw,sh);
+      }
       idx++; if(idx>=total) idx=0;
     }, 1000 / fps);
   }
