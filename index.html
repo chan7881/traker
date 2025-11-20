@@ -28,7 +28,12 @@
 
       <div class="row">
         <button id="selectROI">ROI 선택</button>
-        <button id="runDetect">YOLO 분석 실행</button>
+        <button id="extractFrames">프레임 추출</button>
+        <button id="prevFrame" style="display:none">◀</button>
+        <div id="frameIndex" style="min-width:90px;display:inline-block;line-height:32px">0 / 0</div>
+        <button id="nextFrame" style="display:none">▶</button>
+        <button id="completeROI" style="display:none">ROI 완료(자동분석)</button>
+        <button id="playResults" style="display:none">결과 재생</button>
         <button id="exportCSV">CSV 내보내기</button>
       </div>
 
@@ -39,6 +44,9 @@
       </div>
       <div class="row">
         <div id="status" class="hint">모델 로드 상태: 대기 중...</div>
+      </div>
+      <div class="row">
+        <div class="progress"><div id="extractProgress" class="progress-bar" style="width:0%"></div></div>
       </div>
     </section>
 
