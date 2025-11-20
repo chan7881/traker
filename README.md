@@ -39,3 +39,34 @@
 - 추적 안정성 향상: SORT 또는 ByteTrack을 포팅
 - 실시간 추적(비디오 재생 중): WebGL/Worker로 처리
 - UI 개선: 분석 구간 선택, 슬로우 모션, 확대/축소
+
+## GitHub Pages(예: github.io)로 배포하기
+
+이 프로젝트는 정적 웹 앱이므로 GitHub Pages로 배포하기에 적합합니다. 권장 배포 방식과 주의사항은 다음과 같습니다.
+
+- 권장 파일 구조 (프로젝트 루트에서):
+
+   Traker/ (현재 폴더)
+      - index.html
+      - styles.css
+      - app.js
+      - model/
+         - yolov8n.onnx
+      - README.md
+
+   GitHub Pages로 배포하려면 이 전체 `Traker/` 폴더를 레포지토리의 `docs/` 폴더로 옮기거나(간단) 레포지토리 루트에 둔 다음 Pages 설정에서 `gh-pages` 브랜치나 `docs/`를 소스로 지정하세요.
+
+- 배포 절차 (간단)
+   1. 로컬에서 변경 사항 커밋
+   2. `Traker/` 폴더 전체를 레포지토리의 `docs/`로 복사하거나 `gh-pages` 브랜치로 복사
+   3. GitHub 레포에서 Settings → Pages 에서 소스(Source)를 `main/docs` 또는 `gh-pages`로 설정
+   4. 페이지가 퍼블리시되면 `https://<your-user>.github.io/<repo-name>/Traker/` 또는 `https://<your-user>.github.io/`에서 접근 가능
+
+- 모델 파일 관련 주의사항
+   - 모델 파일(`yolov8n.onnx`)은 리포지토리에서 정적 파일로 제공되므로 CORS 문제 없이 브라우저에서 직접 fetch로 로드할 수 있습니다.
+   - 파일 크기가 커서(>100MB) GitHub 저장소 한 파일 제한을 초과하면 Git LFS 사용 또는 외부 스토리지(예: S3)를 고려하세요.
+   - 모델을 바꾸면 동일한 경로(`model/yolov8n.onnx`)에 덮어쓰기 하거나 `modelPath` 값을 앱에서 조정하세요.
+
+- 성능/보안 팁
+   - GitHub Pages는 HTTPS이므로 onnxruntime-web WebGL/WASM을 안전하게 사용 가능합니다.
+   - 모바일 브라우저에서 모델 로딩이 느리면 더 작은 모델(예: yolov8n) 사용, 또는 서버 사이드 추론(endpoints)을 고려하세요.
