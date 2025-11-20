@@ -87,16 +87,20 @@ if (videoFile) {
       return;
     }
     log(`📄 파일 선택됨: ${f.name}`);
-    
-    const url = URL.createObjectURL(f);
-    video.src = url;
-    
-    video.onloadedmetadata = () => {
-      log(`✓ 비디오 로드됨: ${Math.round(video.duration)}초, ${video.videoWidth}x${video.videoHeight}`);
-      if (extractFramesBtn) extractFramesBtn.disabled = false;
-    };
-    
-    video.play().catch(err => log(`⚠ 재생 실패: ${err.message}`));
+
+    try {
+      const url = URL.createObjectURL(f);
+      video.src = url;
+
+      video.onloadedmetadata = () => {
+        log(`✔ 비디오 로드됨: ${Math.round(video.duration)}초, ${video.videoWidth}x${video.videoHeight}`);
+        if (extractFramesBtn) extractFramesBtn.disabled = false;
+      };
+
+      video.play().catch(err => log(`⚠ 재생 실패: ${err.message}`));
+    } catch (err) {
+      log(`❌ 파일 처리 중 오류 발생: ${err.message}`);
+    }
   });
   log('📁 파일 업로드 리스너 등록됨');
 } else {
