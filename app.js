@@ -380,6 +380,11 @@ async function extractFrames(){
       await new Promise(r=>setTimeout(r,10));
     }
     progressText.textContent = `추출 완료: ${extractedFrames.length} frames`;
+    // Debug: log extracted frame canvas sizes to help diagnose blank preview
+    try{
+      console.log('Extracted frames count:', extractedFrames.length);
+      extractedFrames.forEach((cv,idx)=> console.log(`frame[${idx}] size: ${cv.width}x${cv.height}`));
+    }catch(e){}
   if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
     // show frame navigation UI
     const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
@@ -470,6 +475,16 @@ function showFrame(idx){
   const displayH = (previewEl && previewEl.clientHeight) || video.clientHeight || overlay.clientHeight || 360;
   overlay.width = displayW;
   overlay.height = displayH;
+  // If computed display sizes are zero (some browsers report client sizes as 0 when element hidden),
+  // fall back to the canvas native size so content is visible.
+  if(!overlay.width || !overlay.height){
+    try{
+      overlay.width = c.width || 640;
+      overlay.height = c.height || 360;
+      overlay.style.width = (overlay.width)+'px';
+      overlay.style.height = (overlay.height)+'px';
+    }catch(e){}
+  }
   // ensure CSS size matches canvas internal pixels so overlay aligns with preview image
   try{
     overlay.style.width = displayW + 'px';
@@ -500,6 +515,8 @@ function showFrame(idx){
       prev.style.width = overlay.width + 'px';
       prev.style.height = overlay.height + 'px';
       prev.style.display = '';
+      prev.style.visibility = 'visible';
+      try{ overlay.style.visibility = 'visible'; }catch(e){}
     }
   }catch(e){ console.warn('failed to update framePreview', e); }
 }
