@@ -19,7 +19,13 @@
           영상 업로드
           <input id="videoFile" type="file" accept="video/*" />
         </label>
-        <button id="startCamera">카메라 열기</button>
+        <label class="file-btn">
+          모델 업로드
+          <input id="modelFile" type="file" accept=".onnx" />
+        </label>
+        <button id="inspectModel">모델 검사</button>
+        <button id="startCamera">카메라 촬영</button>
+        <button id="recordToggle" disabled style="display:none">녹화 시작</button>
         <button id="captureFrame">프레임 추출</button>
       </div>
 
