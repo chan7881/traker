@@ -31,3 +31,12 @@ footer{margin-top:12px;color:#9fb7d9}
 }
 
 .hint{font-size:0.9rem;color:#a9c6e9}
+
+/* Tabs */
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tab{background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:8px;cursor:pointer}
+.tab.active{background:linear-gradient(90deg,#06b6d4,#4fd1c5);color:#002733}
+.tab-content{padding:8px;background:rgba(255,255,255,0.02);border-radius:8px}
+
+.big{background:#06b6d4;color:#002733;padding:10px 12px;border-radius:8px;font-weight:600}
+.frame-nav button{padding:6px 10px}

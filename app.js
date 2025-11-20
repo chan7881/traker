@@ -17,9 +17,18 @@ const prevFrameBtn = document.getElementById('prevFrame');
 const nextFrameBtn = document.getElementById('nextFrame');
 const frameIdxEl = document.getElementById('frameIdx');
 const frameROIBtn = document.getElementById('frameROI');
+const tabContents = {
+  1: document.getElementById('tab-1'),
+  2: document.getElementById('tab-2'),
+  3: document.getElementById('tab-3'),
+  4: document.getElementById('tab-4')
+};
 const startCameraBtn = document.getElementById('startCamera');
 const recordToggleBtn = document.getElementById('recordToggle');
 const captureFrameBtn = document.getElementById('captureFrame');
+const extractFramesBtn = document.getElementById('extractFramesBtn');
+const completeROIsBtn = document.getElementById('completeROIs');
+const playResultsBtn = document.getElementById('playResultsBtn');
 const selectROIBtn = document.getElementById('selectROI');
 const runDetectBtn = document.getElementById('runDetect');
 const exportCSVBtn = document.getElementById('exportCSV');
@@ -48,6 +57,18 @@ let frameROIs = {}; // map frameIndex -> {x,y,w,h}
 if(stepExtractBtn) stepExtractBtn.disabled = true;
 if(stepROIBtn) stepROIBtn.disabled = true;
 if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = true;
+
+// Tab switching
+function switchTab(n){
+  // highlight header
+  [1,2,3,4].forEach(i=>{
+    const b = document.getElementById('step'+(i===1? 'Camera': i===2? 'Extract': i===3? 'ROI': 'Analyze'));
+    if(b) b.classList.toggle('active', i===n);
+    const c = tabContents[i]; if(c) c.style.display = (i===n) ? '' : 'none';
+  });
+}
+// default to tab 1
+switchTab(1);
 
 
 // Start with inspect button disabled until a model is found
@@ -108,14 +129,16 @@ startCameraBtn.addEventListener('click', async ()=>{
 // Step camera/file: open camera or file picker
 if(stepCameraBtn){
   stepCameraBtn.addEventListener('click', ()=>{
+    // switch to camera tab content and trigger camera/file UI
+    switchTab(1);
     // prefer camera if available, else open file selector
     if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+      // show record button
+      const rec = document.getElementById('recordToggle'); if(rec){ rec.style.display = ''; rec.disabled = false; }
       startCameraBtn.click();
     }else{
       if(videoFile) videoFile.click();
     }
-    // enable extract step after user provides video (will be enabled further on load)
-    if(stepExtractBtn) stepExtractBtn.disabled = false;
   });
 }
 
@@ -192,6 +215,12 @@ async function extractFrames(){
 }
 
 if(stepExtractBtn){ stepExtractBtn.addEventListener('click', ()=>{ extractFrames(); }); }
+// also switch to tab 2 when extract button clicked
+if(stepExtractBtn) stepExtractBtn.addEventListener('click', ()=>{ switchTab(2); });
+// header tab clicks should switch tabs
+if(stepExtractBtn) stepExtractBtn.addEventListener('click', ()=>{ switchTab(2); });
+if(stepROIBtn) stepROIBtn.addEventListener('click', ()=>{ switchTab(3); });
+if(stepCameraBtn) stepCameraBtn.addEventListener('click', ()=>{ switchTab(1); });
 
 selectROIBtn.addEventListener('click', ()=>{
   selecting = true;
@@ -269,6 +298,27 @@ if(frameROIBtn) frameROIBtn.addEventListener('click', ()=>{
   };
   overlay.addEventListener('pointerup', saveListener);
 });
+
+// extractFramesBtn in tab2 (start extraction)
+if(extractFramesBtn){
+  extractFramesBtn.addEventListener('click', async ()=>{
+    switchTab(2);
+    await extractFrames();
+    // after extraction, enable ROI tab
+    if(stepROIBtn) stepROIBtn.disabled = false;
+  });
+}
+
+// complete ROIs button triggers analysis (stepAnalyzeBtn handler)
+if(completeROIsBtn){
+  completeROIsBtn.addEventListener('click', ()=>{
+    // move to analyze tab then run analysis
+    switchTab(4);
+    if(stepAnalyzeBtn) stepAnalyzeBtn.click();
+  });
+}
+
+if(playResultsBtn){ playResultsBtn.addEventListener('click', ()=>{ playResults(); switchTab(4); }); }
 
 function drawOverlay(){
   ctx.clearRect(0,0,overlay.width,overlay.height);
@@ -406,6 +456,8 @@ if(inspectModelBtn){
   // Step analyze: run YOLO on frames without ROI and assemble results
   if(stepAnalyzeBtn){
     stepAnalyzeBtn.addEventListener('click', async ()=>{
+      // switch to results tab when analysis starts
+      try{ switchTab(4); }catch(e){}
       if(!extractedFrames || !extractedFrames.length){ alert('프레임이 없습니다. 먼저 프레임을 추출하세요.'); return; }
       // For frames without ROI, run YOLO if available
       const confTh = Number(confInput.value) || 0.3;
