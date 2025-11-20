@@ -120,6 +120,50 @@ function bindExtractButton(){
 // bind now
 bindExtractButton();
 
+// Robustly bind other UI buttons (prev/next/frame ROI/play/export) to support click/pointer/touch across devices
+function bindAllUI(){
+  // helper to safely bind multiple event types
+  function bindMulti(el, handler){
+    if(!el) return;
+    el.removeEventListener('click', handler);
+    el.removeEventListener('pointerdown', handler);
+    el.removeEventListener('touchstart', handler);
+    el.removeEventListener('touchend', handler);
+    el.addEventListener('click', handler);
+    el.addEventListener('pointerdown', handler);
+    el.addEventListener('touchstart', handler, {passive:true});
+    el.addEventListener('touchend', handler, {passive:true});
+  }
+
+  bindMulti(prevFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); showFrame(currentFrameIndex-1); });
+  bindMulti(nextFrameBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); showFrame(currentFrameIndex+1); });
+  bindMulti(frameROIBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault();
+    // reuse existing handler logic: open selection mode for current frame
+    if(!extractedFrames || !extractedFrames.length) { mobileLog('프레임이 없습니다. 먼저 추출하세요.'); return; }
+    selecting = true; mobileLog('프레임 ROI 선택 모드로 진입');
+    alert('이 프레임에서 ROI를 드래그하여 선택하세요. 선택 후 빈 공간을 누르거나 다시 ROI 버튼을 누르세요.');
+    const saveListener = ()=>{
+      if(roi){
+        const scaleX = extractedFrames[currentFrameIndex].width / overlay.width;
+        const scaleY = extractedFrames[currentFrameIndex].height / overlay.height;
+        frameROIs[currentFrameIndex] = {x: Math.round(roi.x*scaleX), y: Math.round(roi.y*scaleY), w: Math.round(roi.w*scaleX), h: Math.round(roi.h*scaleY)};
+        selecting = false; roi = null; showFrame(currentFrameIndex);
+        if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = false;
+        mobileLog(`ROI 저장: frame ${currentFrameIndex+1}`);
+      }
+      overlay.removeEventListener('pointerup', saveListener);
+    };
+    overlay.addEventListener('pointerup', saveListener);
+  });
+
+  bindMulti(playResultsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); playResults(); switchTab(4); });
+  bindMulti(completeROIsBtn, (e)=>{ if(e && e.preventDefault) e.preventDefault(); switchTab(4); if(stepAnalyzeBtn) stepAnalyzeBtn.click(); });
+  // exportCSVBtn already has its own handler; no need to rebind to avoid recursion
+}
+
+// call binding for other UI
+bindAllUI();
+
 
 // Start with inspect button disabled until a model is found
 if(inspectModelBtn) inspectModelBtn.disabled = true;
@@ -299,6 +343,8 @@ async function extractFrames(){
     if(extractFramesBtn){ extractFramesBtn.textContent = `추출 완료 (${extractedFrames.length})`; extractFramesBtn.style.background = `linear-gradient(90deg,#4fd1c5 100%, #06b6d4 100%)`; }
     // show frame navigation UI
     const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
+  // ensure nav buttons are enabled
+  try{ if(prevFrameBtn) prevFrameBtn.disabled = false; if(nextFrameBtn) nextFrameBtn.disabled = false; if(frameROIBtn) frameROIBtn.disabled = false; }catch(e){}
     currentFrameIndex = 0; showFrame(0);
     if(stepROIBtn) stepROIBtn.disabled = false;
     if(stepExtractBtn) stepExtractBtn.disabled = true;
@@ -387,27 +433,6 @@ function showFrame(idx){
 
 if(prevFrameBtn) prevFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex-1); });
 if(nextFrameBtn) nextFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex+1); });
-
-// per-frame ROI button opens selection mode for current frame
-if(frameROIBtn) frameROIBtn.addEventListener('click', ()=>{
-  if(!extractedFrames || !extractedFrames.length) return;
-  selecting = true;
-  alert('이 프레임에서 ROI를 드래그하여 선택하세요. 선택 후 빈 공간을 누르거나 다시 ROI 버튼을 누르세요.');
-  // when selection completes, overlay pointerup handler stores ROI into frameROIs
-  // the overlay pointerup implementation above sets global roi; we'll transfer it
-  const saveListener = ()=>{
-    if(roi){
-      // scale overlay roi coords back to stored canvas coords
-      const scaleX = extractedFrames[currentFrameIndex].width / overlay.width;
-      const scaleY = extractedFrames[currentFrameIndex].height / overlay.height;
-      frameROIs[currentFrameIndex] = {x: Math.round(roi.x*scaleX), y: Math.round(roi.y*scaleY), w: Math.round(roi.w*scaleX), h: Math.round(roi.h*scaleY)};
-      selecting = false; roi = null; showFrame(currentFrameIndex);
-      if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = false;
-    }
-    overlay.removeEventListener('pointerup', saveListener);
-  };
-  overlay.addEventListener('pointerup', saveListener);
-});
 
 // extractFramesBtn binding is handled by bindExtractButton() above which supports click/pointer/touch events
 
