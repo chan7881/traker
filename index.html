@@ -14,27 +14,31 @@
     </header>
 
     <section class="controls">
-      <div class="row">
-        <label class="file-btn">
-          영상 업로드
-          <input id="videoFile" type="file" accept="video/*" />
-        </label>
-        <!-- 모델 업로드: 기본적으로 프로젝트 루트의 `yolov8n.onnx`를 사용합니다. 필요하면 app.js의 modelPath를 변경하세요. -->
-        <button id="inspectModel">모델 검사</button>
-        <button id="startCamera">카메라 촬영</button>
-        <button id="recordToggle" disabled style="display:none">녹화 시작</button>
-        <button id="captureFrame">프레임 추출</button>
+      <!-- Simplified step-by-step UI for students -->
+      <div class="row steps">
+        <button id="stepCamera" class="big">1) 카메라 촬영 / 파일 업로드</button>
+        <button id="stepExtract" class="big" disabled>2) 프레임 추출</button>
+        <button id="stepROI" class="big" disabled>3) ROI 선택</button>
+        <button id="stepAnalyze" class="big" disabled>4) 결과 보기</button>
+      </div>
+
+      <div class="row small">
+        <label>FPS: <input id="fpsInput" type="number" value="10" min="1" max="60"></label>
+        <label>신뢰도: <input id="confInput" type="number" value="0.3" step="0.05" min="0" max="1"></label>
       </div>
 
       <div class="row">
-        <button id="selectROI">ROI 선택</button>
-        <button id="extractFrames">프레임 추출</button>
-        <button id="prevFrame" style="display:none">◀</button>
-        <div id="frameIndex" style="min-width:90px;display:inline-block;line-height:32px">0 / 0</div>
-        <button id="nextFrame" style="display:none">▶</button>
-        <button id="completeROI" style="display:none">ROI 완료(자동분석)</button>
-        <button id="playResults" style="display:none">결과 재생</button>
-        <button id="exportCSV">CSV 내보내기</button>
+        <div id="extractProgress" style="flex:1;display:none">
+          <div style="background:#123;height:12px;border-radius:6px;overflow:hidden"><div id="progressBar" style="background:#4fd1c5;height:100%;width:0%"></div></div>
+          <div class="hint" id="progressText">0%</div>
+        </div>
+      </div>
+
+      <div class="row frame-nav" style="display:none;align-items:center;gap:8px;margin-top:8px">
+        <button id="prevFrame">◀</button>
+        <div id="frameIdx" class="hint">Frame 0 / 0</div>
+        <button id="nextFrame">▶</button>
+        <button id="frameROI" class="small">이 프레임 ROI 선택</button>
       </div>
 
       <div class="row small">
@@ -44,9 +48,6 @@
       </div>
       <div class="row">
         <div id="status" class="hint">모델 로드 상태: 대기 중...</div>
-      </div>
-      <div class="row">
-        <div class="progress"><div id="extractProgress" class="progress-bar" style="width:0%"></div></div>
       </div>
     </section>
 

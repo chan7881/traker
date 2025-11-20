@@ -6,6 +6,17 @@ const overlay = document.getElementById('overlay');
 const ctx = overlay.getContext('2d');
 
 const videoFile = document.getElementById('videoFile');
+const stepCameraBtn = document.getElementById('stepCamera');
+const stepExtractBtn = document.getElementById('stepExtract');
+const stepROIBtn = document.getElementById('stepROI');
+const stepAnalyzeBtn = document.getElementById('stepAnalyze');
+const extractProgress = document.getElementById('extractProgress');
+const progressBar = document.getElementById('progressBar');
+const progressText = document.getElementById('progressText');
+const prevFrameBtn = document.getElementById('prevFrame');
+const nextFrameBtn = document.getElementById('nextFrame');
+const frameIdxEl = document.getElementById('frameIdx');
+const frameROIBtn = document.getElementById('frameROI');
 const startCameraBtn = document.getElementById('startCamera');
 const recordToggleBtn = document.getElementById('recordToggle');
 const captureFrameBtn = document.getElementById('captureFrame');
@@ -14,20 +25,6 @@ const runDetectBtn = document.getElementById('runDetect');
 const exportCSVBtn = document.getElementById('exportCSV');
 const modelFileInput = document.getElementById('modelFile');
 const inspectModelBtn = document.getElementById('inspectModel');
-const extractFramesBtn = document.getElementById('extractFrames');
-const prevFrameBtn = document.getElementById('prevFrame');
-const nextFrameBtn = document.getElementById('nextFrame');
-const frameIndexEl = document.getElementById('frameIndex');
-const extractProgressEl = document.getElementById('extractProgress');
-const completeROIBtn = document.getElementById('completeROI');
-const playResultsBtn = document.getElementById('playResults');
-
-const frameViewer = document.getElementById('frameViewer');
-let frameViewerCtx = null;
-
-// Frame extraction / per-frame ROI
-let frames = []; // array of {dataUrl, time, roi: {x,y,w,h} or null, detection}
-let currentFrameIndex = 0;
 
 const fpsInput = document.getElementById('fpsInput');
 const confInput = document.getElementById('confInput');
@@ -41,6 +38,17 @@ let modelPath = './yolov8n.onnx'; // default to local file in project root
 let currentStream = null;
 let mediaRecorder = null;
 let recordedChunks = [];
+
+// Frame extraction / per-frame state
+let extractedFrames = []; // array of canvas images
+let currentFrameIndex = 0;
+let frameROIs = {}; // map frameIndex -> {x,y,w,h}
+
+// Simplify initial UI: disable steps until prerequisites
+if(stepExtractBtn) stepExtractBtn.disabled = true;
+if(stepROIBtn) stepROIBtn.disabled = true;
+if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = true;
+
 
 // Start with inspect button disabled until a model is found
 if(inspectModelBtn) inspectModelBtn.disabled = true;
@@ -57,16 +65,13 @@ let roi = null; // {x,y,w,h}
 let posChart, velChart;
 
 function resizeOverlay(){
-  // keep overlay matching either video or frame viewer depending on mode
-  const target = (frames.length>0 && frameViewer) ? frameViewer : video;
-  overlay.width = target.clientWidth;
-  overlay.height = target.clientHeight;
+  overlay.width = video.clientWidth;
+  overlay.height = video.clientHeight;
 }
 
 window.addEventListener('resize', resizeOverlay);
 video.addEventListener('loadedmetadata', ()=>{
   resizeOverlay();
-  if(frameViewer) frameViewerCtx = frameViewer.getContext('2d');
 });
 
 videoFile.addEventListener('change', (e)=>{
@@ -80,13 +85,8 @@ videoFile.addEventListener('change', (e)=>{
   video.src = url;
   video.muted = false;
   video.play();
-  // clear any previously extracted frames when a new file is loaded
-  frames = []; currentFrameIndex = 0;
-  if(frameViewer) frameViewer.style.display = 'none';
-  if(prevFrameBtn) prevFrameBtn.style.display = 'none';
-  if(nextFrameBtn) nextFrameBtn.style.display = 'none';
-  if(completeROIBtn) completeROIBtn.style.display = 'none';
-  if(playResultsBtn) playResultsBtn.style.display = 'none';
+  // enable extract step once video is loaded
+  video.addEventListener('loadedmetadata', ()=>{ if(stepExtractBtn) stepExtractBtn.disabled = false; }, {once:true});
 });
 
 // Camera flow: open preview and enable recording. Recording will create a blob video which
@@ -104,6 +104,20 @@ startCameraBtn.addEventListener('click', async ()=>{
     alert('카메라 권한이 필요합니다: '+err.message);
   }
 });
+
+// Step camera/file: open camera or file picker
+if(stepCameraBtn){
+  stepCameraBtn.addEventListener('click', ()=>{
+    // prefer camera if available, else open file selector
+    if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+      startCameraBtn.click();
+    }else{
+      if(videoFile) videoFile.click();
+    }
+    // enable extract step after user provides video (will be enabled further on load)
+    if(stepExtractBtn) stepExtractBtn.disabled = false;
+  });
+}
 
 // Recording toggle: start/stop
 if(recordToggleBtn){
@@ -147,11 +161,42 @@ captureFrameBtn.addEventListener('click', ()=>{
   drawOverlay();
 });
 
+// Extract frames: sample video at fpsInput value and store canvases
+async function extractFrames(){
+  if(!video || !video.duration) { alert('먼저 영상(카메라 또는 업로드)을 준비하세요.'); return; }
+  extractedFrames = [];
+  const fps = Number(fpsInput.value) || 10;
+  const duration = video.duration;
+  const total = Math.max(1, Math.floor(duration * fps));
+  if(extractProgress) extractProgress.style.display = '';
+  for(let i=0;i<total;i++){
+    const t = i / fps;
+    progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
+    progressBar.style.width = `${Math.round(((i+1)/total)*100)}%`;
+    await seekToTime(t);
+    const c = captureFrameImage();
+    // store a copy canvas
+    const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;
+    copy.getContext('2d').drawImage(c,0,0);
+    extractedFrames.push(copy);
+    // small yield
+    await new Promise(r=>setTimeout(r,10));
+  }
+  progressText.textContent = `추출 완료: ${extractedFrames.length} frames`;
+  progressBar.style.width = '100%';
+  // show frame navigation UI
+  const nav = document.querySelector('.frame-nav'); if(nav) nav.style.display = '';
+  currentFrameIndex = 0; showFrame(0);
+  if(stepROIBtn) stepROIBtn.disabled = false;
+  if(stepExtractBtn) stepExtractBtn.disabled = true;
+}
+
+if(stepExtractBtn){ stepExtractBtn.addEventListener('click', ()=>{ extractFrames(); }); }
+
 selectROIBtn.addEventListener('click', ()=>{
-  // Enter ROI selection for current frame (if frames exist) or video
   selecting = true;
   roi = null;
-  alert('화면에서 터치하거나 마우스로 드래그하여 선택하세요. 선택이 끝나면 다시 ROI 선택 버튼을 누르세요.');
+  alert('영역을 화면에서 터치하거나 마우스로 드래그하여 선택하세요. 완료되면 다시 ROI 버튼을 누르세요.');
 });
 
 overlay.addEventListener('pointerdown', (e)=>{
@@ -175,39 +220,61 @@ overlay.addEventListener('pointerdown', (e)=>{
       x: Math.min(startX,endX), y: Math.min(startY,endY), w: Math.abs(endX-startX), h: Math.abs(endY-startY)
     };
     selecting = false;
-    // If we're in frame mode, store ROI to current frame (convert overlay coords to frame pixels)
-    if(frames.length>0){
-      const fv = frameViewer.getBoundingClientRect();
-      const fw = frameViewer.width; const fh = frameViewer.height;
-      const scaleX = fw / fv.width; const scaleY = fh / fv.height;
-      const fr = { x: roi.x*scaleX, y: roi.y*scaleY, w: roi.w*scaleX, h: roi.h*scaleY };
-      frames[currentFrameIndex].roi = fr;
-    }
     drawOverlay();
   }
   overlay.addEventListener('pointermove', move);
   overlay.addEventListener('pointerup', up);
 });
 
+// Frame navigation and per-frame ROI selection
+function showFrame(idx){
+  if(!extractedFrames || !extractedFrames.length) return;
+  currentFrameIndex = Math.max(0, Math.min(idx, extractedFrames.length-1));
+  const c = extractedFrames[currentFrameIndex];
+  // draw frame into video area (use overlay's parent video-wrap)
+  // We'll draw into the overlay's canvas sized to match display
+  overlay.width = c.width * (video.clientWidth / video.videoWidth || 1);
+  overlay.height = c.height * (video.clientHeight / video.videoHeight || 1);
+  const drawCtx = overlay.getContext('2d');
+  drawCtx.clearRect(0,0,overlay.width,overlay.height);
+  // scale image to overlay size
+  drawCtx.drawImage(c, 0,0, overlay.width, overlay.height);
+  // if ROI exists for this frame, draw it
+  const roiObj = frameROIs[currentFrameIndex];
+  if(roiObj){ drawCtx.strokeStyle='#00ff88'; drawCtx.lineWidth=2; drawCtx.strokeRect(roiObj.x, roiObj.y, roiObj.w, roiObj.h); }
+  // update index label
+  if(frameIdxEl) frameIdxEl.textContent = `Frame ${currentFrameIndex+1} / ${extractedFrames.length}`;
+}
+
+if(prevFrameBtn) prevFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex-1); });
+if(nextFrameBtn) nextFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex+1); });
+
+// per-frame ROI button opens selection mode for current frame
+if(frameROIBtn) frameROIBtn.addEventListener('click', ()=>{
+  if(!extractedFrames || !extractedFrames.length) return;
+  selecting = true;
+  alert('이 프레임에서 ROI를 드래그하여 선택하세요. 선택 후 빈 공간을 누르거나 다시 ROI 버튼을 누르세요.');
+  // when selection completes, overlay pointerup handler stores ROI into frameROIs
+  // the overlay pointerup implementation above sets global roi; we'll transfer it
+  const saveListener = ()=>{
+    if(roi){
+      // scale overlay roi coords back to stored canvas coords
+      const scaleX = extractedFrames[currentFrameIndex].width / overlay.width;
+      const scaleY = extractedFrames[currentFrameIndex].height / overlay.height;
+      frameROIs[currentFrameIndex] = {x: Math.round(roi.x*scaleX), y: Math.round(roi.y*scaleY), w: Math.round(roi.w*scaleX), h: Math.round(roi.h*scaleY)};
+      selecting = false; roi = null; showFrame(currentFrameIndex);
+      if(stepAnalyzeBtn) stepAnalyzeBtn.disabled = false;
+    }
+    overlay.removeEventListener('pointerup', saveListener);
+  };
+  overlay.addEventListener('pointerup', saveListener);
+});
+
 function drawOverlay(){
   ctx.clearRect(0,0,overlay.width,overlay.height);
-  if(frames.length>0){
-    // overlay should match frameViewer size
-    const fv = frameViewer.getBoundingClientRect();
-    overlay.style.left = fv.left + 'px'; overlay.style.top = fv.top + 'px';
-    // draw ROI for current frame
-    const f = frames[currentFrameIndex];
-    if(f && f.roi){
-      // roi stored in frame pixels; convert to overlay pixels
-      const scaleX = overlay.width / frameViewer.width; const scaleY = overlay.height / frameViewer.height;
-      const rx = f.roi.x * scaleX; const ry = f.roi.y * scaleY; const rw = f.roi.w * scaleX; const rh = f.roi.h * scaleY;
-      ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 2; ctx.setLineDash([6,4]); ctx.strokeRect(rx, ry, rw, rh);
-    }
-  } else {
-    if(roi){
-      ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
-      ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
-    }
+  if(roi){
+    ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
+    ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
   }
   // draw latest detection for current frame if any
   const last = detectionsPerFrame.length ? detectionsPerFrame[detectionsPerFrame.length-1] : null;
@@ -221,12 +288,11 @@ function drawOverlay(){
 
 function mapBoxToOverlay(box){
   // box coordinates stored in video pixel space (video width/height), convert to overlay pixels
-  const target = (frames.length>0 && frameViewer) ? frameViewer : video;
-  const rect = target.getBoundingClientRect();
-  const vw = target.width || target.videoWidth; const vh = target.height || target.videoHeight;
+  const videoRect = video.getBoundingClientRect();
+  const vw = video.videoWidth; const vh = video.videoHeight;
   if(!vw||!vh) return [0,0,0,0];
-  const scaleX = overlay.width / vw;
-  const scaleY = overlay.height / vh;
+  const scaleX = videoRect.width / vw;
+  const scaleY = videoRect.height / vh;
   const [x1,y1,x2,y2] = box;
   return [x1*scaleX, y1*scaleY, x2*scaleX, y2*scaleY];
 }
@@ -278,104 +344,6 @@ async function loadModel(){
 
 // Try to load model at startup (non-blocking)
 loadModel();
-
-// Frame extraction handler
-if(extractFramesBtn){
-  extractFramesBtn.addEventListener('click', async ()=>{
-    if(!video.src || video.readyState < 2){ alert('분석할 영상을 먼저 업로드하거나 촬영하세요.'); return; }
-    frames = []; currentFrameIndex = 0;
-    const fps = Number(fpsInput.value) || 10;
-    const duration = video.duration || 0;
-    const total = Math.max(1, Math.floor(duration * fps));
-    extractProgressEl.style.width = '0%';
-    // pause video and extract by seeking
-    video.pause();
-    for(let i=0;i<total;i++){
-      const t = i / fps;
-      await seekToTime(t);
-      const c = captureFrameImage();
-      // store as dataUrl to reduce live-canvas references
-      const dataUrl = c.toDataURL('image/png');
-      frames.push({dataUrl, time: video.currentTime, roi:null, detection:null});
-      const pct = Math.round(((i+1)/total)*100);
-      if(extractProgressEl) extractProgressEl.style.width = pct + '%';
-    }
-    // show frame viewer and navigation
-    if(frameViewer){
-      frameViewer.style.display = 'block';
-      // size frameViewer to video pixel dims
-      frameViewer.width = video.videoWidth; frameViewer.height = video.videoHeight;
-      frameViewer.style.width = video.clientWidth + 'px';
-      frameViewerCtx = frameViewer.getContext('2d');
-      showFrame(0);
-    }
-    if(prevFrameBtn) prevFrameBtn.style.display = '';
-    if(nextFrameBtn) nextFrameBtn.style.display = '';
-    if(completeROIBtn) completeROIBtn.style.display = '';
-    if(playResultsBtn) playResultsBtn.style.display = '';
-  });
-}
-
-function showFrame(idx){
-  if(!frames || !frames.length) return;
-  currentFrameIndex = Math.max(0, Math.min(idx, frames.length-1));
-  const f = frames[currentFrameIndex];
-  const img = new Image(); img.onload = ()=>{
-    frameViewerCtx.clearRect(0,0,frameViewer.width,frameViewer.height);
-    frameViewerCtx.drawImage(img, 0,0, frameViewer.width, frameViewer.height);
-    // update index display
-    if(frameIndexEl) frameIndexEl.textContent = (currentFrameIndex+1) + ' / ' + frames.length;
-    drawOverlay();
-  };
-  img.src = f.dataUrl;
-}
-
-if(prevFrameBtn) prevFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex-1); });
-if(nextFrameBtn) nextFrameBtn.addEventListener('click', ()=>{ showFrame(currentFrameIndex+1); });
-
-// Complete ROI: run YOLO on frames without ROI (if model loaded), else leave null
-if(completeROIBtn){
-  completeROIBtn.addEventListener('click', async ()=>{
-    if(frames.length===0){ alert('먼저 프레임을 추출하세요.'); return; }
-    const confTh = Number(confInput.value) || 0.3;
-    for(let i=0;i<frames.length;i++){
-      if(frames[i].roi) continue; // skip already labeled
-      // create canvas from dataUrl
-      const img = new Image();
-      await new Promise((res)=>{ img.onload=res; img.src = frames[i].dataUrl; });
-      const tmp = document.createElement('canvas'); tmp.width = img.width; tmp.height = img.height;
-      const tctx = tmp.getContext('2d'); tctx.drawImage(img,0,0);
-      if(modelLoaded && modelSession){
-        const {tensor, padInfo} = preprocessForYOLO(tmp, 640);
-        const feeds = {}; feeds[modelSession.inputNames[0]] = tensor;
-        try{
-          const out = await modelSession.run(feeds);
-          const outName = modelSession.outputNames[0];
-          const dets = parseYoloOutput(out[outName], padInfo, confTh);
-          if(dets && dets.length){ frames[i].detection = dets[0]; }
-        }catch(err){ console.error('frame YOLO error', err); }
-      }
-    }
-    alert('자동 분석(미선택 프레임)이 완료되었습니다. 결과 재생을 눌러 확인하세요.');
-    showFrame(0);
-  });
-}
-
-// Play results: animate frames with overlayed detection/roi
-if(playResultsBtn){
-  playResultsBtn.addEventListener('click', ()=>{
-    if(frames.length===0){ alert('분석할 프레임이 없습니다.'); return; }
-    let i=0; const iv = setInterval(()=>{
-      showFrame(i);
-      // draw detection box if exists
-      const f = frames[i];
-      if(f && f.detection){
-        // draw box on overlay after showFrame triggers drawOverlay
-      }
-      i++; if(i>=frames.length){ clearInterval(iv); }
-    }, 1000/ (Number(fpsInput.value)||10));
-  });
-}
 
 // Allow user to upload a model file to avoid CORS/server issues
 if(modelFileInput){
@@ -434,6 +402,61 @@ if(inspectModelBtn){
     }
   });
 }
+
+  // Step analyze: run YOLO on frames without ROI and assemble results
+  if(stepAnalyzeBtn){
+    stepAnalyzeBtn.addEventListener('click', async ()=>{
+      if(!extractedFrames || !extractedFrames.length){ alert('프레임이 없습니다. 먼저 프레임을 추출하세요.'); return; }
+      // For frames without ROI, run YOLO if available
+      const confTh = Number(confInput.value) || 0.3;
+      const resultsPerFrame = [];
+      for(let i=0;i<extractedFrames.length;i++){
+        const roiObj = frameROIs[i];
+        if(roiObj){
+          // use centroid of ROI
+          const cx = roiObj.x + roiObj.w/2; const cy = roiObj.y + roiObj.h/2;
+          resultsPerFrame.push({box:[roiObj.x, roiObj.y, roiObj.x+roiObj.w, roiObj.y+roiObj.h], score:1.0, cx, cy});
+        }else{
+          // run YOLO on this frame if model loaded
+          if(modelLoaded && modelSession){
+            // prepare tensor from extractedFrames[i]
+            const {tensor, padInfo} = preprocessForYOLO(extractedFrames[i], 640);
+            const feeds = {}; feeds[modelSession.inputNames[0]] = tensor;
+            try{
+              const out = await modelSession.run(feeds);
+              const outName = modelSession.outputNames[0];
+              const parsed = parseYoloOutput(out[outName], padInfo, confTh);
+              if(parsed && parsed.length){ const d = parsed[0]; const [x1,y1,x2,y2] = d.box; const cx=(x1+x2)/2; const cy=(y1+y2)/2; resultsPerFrame.push({box:d.box, score:d.score, cx, cy}); }
+              else resultsPerFrame.push(null);
+            }catch(err){ console.error('frame inference failed', err); resultsPerFrame.push(null); }
+          }else{ resultsPerFrame.push(null); }
+        }
+      }
+      // prepare analysis points for charts
+      detectionsPerFrame = resultsPerFrame.map((r,idx)=>{ return r ? {time: idx / (Number(fpsInput.value)||10), box:r.box, score:r.score} : {time: idx / (Number(fpsInput.value)||10), box:null, score:0}; });
+      analyzeTrackData();
+      // enable playback step: draw result frames to canvas and play
+      playResults();
+    });
+  }
+
+  // Basic playback of result frames on overlay canvas
+  let playTimer = null;
+  function playResults(){
+    if(!extractedFrames || !extractedFrames.length) return;
+    let idx = 0; const total = extractedFrames.length; const fps = Number(fpsInput.value)||10;
+    if(playTimer) clearInterval(playTimer);
+    playTimer = setInterval(()=>{
+      const c = extractedFrames[idx];
+      const drawCtx = overlay.getContext('2d');
+      overlay.width = video.clientWidth; overlay.height = video.clientHeight;
+      drawCtx.clearRect(0,0,overlay.width,overlay.height);
+      drawCtx.drawImage(c,0,0, overlay.width, overlay.height);
+      const det = detectionsPerFrame[idx];
+      if(det && det.box){ const [x1,y1,x2,y2]=det.box; const sx = x1*(overlay.width/c.width), sy=y1*(overlay.height/c.height), sw=(x2-x1)*(overlay.width/c.width), sh=(y2-y1)*(overlay.height/c.height); drawCtx.strokeStyle='#ff0066'; drawCtx.lineWidth=3; drawCtx.strokeRect(sx,sy,sw,sh); }
+      idx++; if(idx>=total) idx=0;
+    }, 1000 / fps);
+  }
 
 runDetectBtn.addEventListener('click', async ()=>{
   if(!modelLoaded){
