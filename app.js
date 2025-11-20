@@ -35,9 +35,11 @@ const exportCSVBtn = document.getElementById('exportCSV');
 const modelFileInput = document.getElementById('modelFile');
 const inspectModelBtn = document.getElementById('inspectModel');
 
-const fpsInput = document.getElementById('fpsInput');
-const confInput = document.getElementById('confInput');
-const scaleInput = document.getElementById('scaleInput');
+// Note: there are duplicate ID inputs in the page (one inside tab-2 and one in the footer).
+// Use helper accessors that prefer the tab-2 inputs to avoid reading the wrong element.
+function getFpsValue(){ const el = document.querySelector('#tab-2 #fpsInput') || document.getElementById('fpsInput'); return Number(el && el.value) || 10; }
+function getConfValue(){ const el = document.querySelector('#tab-2 #confInput') || document.getElementById('confInput'); return Number(el && el.value) || 0.3; }
+function getScaleValue(){ const el = document.getElementById('scaleInput'); return parseFloat(el && el.value) || 1; }
 
 let modelSession = null;
 let modelLoaded = false;
@@ -80,7 +82,7 @@ if(statusElInit) statusElInit.textContent = '모델 로드 상태: 로딩 시도
 
 // Analysis data
 let detectionsPerFrame = []; // [{time, box: [x1,y1,x2,y2], score}]
-let scalePxPerUnit = parseFloat(scaleInput.value) || 1;
+let scalePxPerUnit = getScaleValue();
 
 // ROI selection
 let selecting = false;
@@ -205,10 +207,11 @@ async function extractFrames(){
   }
   if(!video.duration || isNaN(video.duration) || video.duration===0){ alert('비디오 정보를 불러오지 못했습니다. 다른 파일을 시도하세요.'); return; }
   extractedFrames = [];
-  const fps = Number(fpsInput.value) || 10;
+  const fps = getFpsValue();
   const duration = video.duration;
   const total = Math.max(1, Math.floor(duration * fps));
   try{
+    console.log('extractFrames start', {duration, fps, total});
     if(extractProgress) extractProgress.style.display = '';
     if(progressBar) progressBar.style.width = '0%';
     if(progressText) progressText.textContent = `프레임 추출: 0 / ${total}`;
@@ -217,6 +220,7 @@ async function extractFrames(){
     const t = i / fps;
       if(progressText) progressText.textContent = `프레임 추출: ${i+1} / ${total}`;
       if(progressBar) progressBar.style.width = `${Math.round(((i+1)/total)*100)}%`;
+      console.log(`seek to ${t.toFixed(3)}s (${i+1}/${total})`);
       await seekToTime(t);
       const c = captureFrameImage();
       // store a copy canvas
@@ -480,7 +484,7 @@ if(inspectModelBtn){
       // Try parsing the first output through our parser (if suitable)
       const firstOutName = modelSession.outputNames && modelSession.outputNames[0];
       if(firstOutName && out[firstOutName]){
-        const parsed = parseYoloOutput(out[firstOutName], {dx:0,dy:0,scale:1}, Number(confInput.value)||0.1);
+    const parsed = parseYoloOutput(out[firstOutName], {dx:0,dy:0,scale:1}, getConfValue()||0.1);
         console.log('Parsed detections sample (first 20):', parsed.slice(0,20));
       }
       alert('모델 검사가 완료되었습니다. 콘솔(개발자 도구)을 확인하세요.');
@@ -498,7 +502,7 @@ if(inspectModelBtn){
       try{ switchTab(4); }catch(e){}
       if(!extractedFrames || !extractedFrames.length){ alert('프레임이 없습니다. 먼저 프레임을 추출하세요.'); return; }
       // For frames without ROI, run YOLO if available
-      const confTh = Number(confInput.value) || 0.3;
+  const confTh = getConfValue();
       const resultsPerFrame = [];
       for(let i=0;i<extractedFrames.length;i++){
         const roiObj = frameROIs[i];
@@ -523,7 +527,7 @@ if(inspectModelBtn){
         }
       }
       // prepare analysis points for charts
-      detectionsPerFrame = resultsPerFrame.map((r,idx)=>{ return r ? {time: idx / (Number(fpsInput.value)||10), box:r.box, score:r.score} : {time: idx / (Number(fpsInput.value)||10), box:null, score:0}; });
+  detectionsPerFrame = resultsPerFrame.map((r,idx)=>{ return r ? {time: idx / getFpsValue(), box:r.box, score:r.score} : {time: idx / getFpsValue(), box:null, score:0}; });
       analyzeTrackData();
       // enable playback step: draw result frames to canvas and play
       playResults();
@@ -534,7 +538,7 @@ if(inspectModelBtn){
   let playTimer = null;
   function playResults(){
     if(!extractedFrames || !extractedFrames.length) return;
-    let idx = 0; const total = extractedFrames.length; const fps = Number(fpsInput.value)||10;
+  let idx = 0; const total = extractedFrames.length; const fps = getFpsValue()||10;
     if(playTimer) clearInterval(playTimer);
     playTimer = setInterval(()=>{
       const c = extractedFrames[idx];
@@ -561,7 +565,7 @@ async function analyzeByROI(){
   // Simple analysis: take centroid of ROI for each sampled frame
   if(!roi){ alert('분석할 ROI를 먼저 선택하세요'); return; }
   detectionsPerFrame = [];
-  const fps = Number(fpsInput.value) || 30;
+  const fps = getFpsValue() || 30;
   const duration = video.duration || 0;
   const totalFrames = Math.floor(duration*fps);
   for(let i=0;i<totalFrames;i++){
@@ -584,10 +588,10 @@ function roiToVideoBox(roiOverlay){
 async function analyzeWithYOLO(){
   if(!modelLoaded){ alert('모델이 로드되어 있지 않습니다.'); return; }
   detectionsPerFrame = [];
-  const fps = Number(fpsInput.value) || 30;
+  const fps = getFpsValue() || 30;
   const duration = video.duration || 0;
   const totalFrames = Math.floor(duration*fps);
-  const confTh = Number(confInput.value) || 0.3;
+  const confTh = getConfValue();
 
   // For stability, pause playback and step through frames by seeking
   const start = 0; const end = totalFrames;
@@ -635,9 +639,17 @@ async function analyzeWithYOLO(){
 function captureFrameImage(){
   // draw video current frame to temp canvas and return canvas
   const tmp = document.createElement('canvas');
-  tmp.width = video.videoWidth; tmp.height = video.videoHeight;
+  // some browsers/devices can report video.videoWidth==0 intermittently; fall back to client sizes
+  const vw = video.videoWidth || Math.max(320, video.clientWidth);
+  const vh = video.videoHeight || Math.max(240, video.clientHeight);
+  tmp.width = vw; tmp.height = vh;
   const tctx = tmp.getContext('2d');
-  tctx.drawImage(video, 0,0,tmp.width, tmp.height);
+  try{
+    tctx.drawImage(video, 0,0, tmp.width, tmp.height);
+  }catch(err){
+    console.warn('captureFrameImage drawImage failed, returning blank canvas', err);
+    tctx.fillStyle = 'rgb(100,100,100)'; tctx.fillRect(0,0,tmp.width,tmp.height);
+  }
   return tmp;
 }
 
@@ -753,9 +765,12 @@ function boxIoU(a,b){
 
 function seekToTime(t){
   return new Promise((res,rej)=>{
-    const onseek = ()=>{ video.removeEventListener('seeked', onseek); res(); };
+    let done = false;
+    const onseek = ()=>{ if(done) return; done = true; clearTimeout(timer); video.removeEventListener('seeked', onseek); res(); };
     video.addEventListener('seeked', onseek);
-    try{ video.currentTime = Math.min(video.duration || t, t); }catch(err){ video.removeEventListener('seeked', onseek); res(); }
+    try{ video.currentTime = Math.min(video.duration || t, t); }catch(err){ console.warn('seekToTime set currentTime failed', err); }
+    // fallback: if seeked doesn't fire within 1200ms, resolve anyway to avoid stalling
+    const timer = setTimeout(()=>{ if(done) return; done = true; video.removeEventListener('seeked', onseek); console.warn('seekToTime fallback timeout for', t); res(); }, 1200);
   });
 }
 
