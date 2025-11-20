@@ -111,7 +111,11 @@ videoFile.addEventListener('change', (e)=>{
   video.muted = false;
   video.play();
   // enable extract step once video is loaded
-  video.addEventListener('loadedmetadata', ()=>{ if(stepExtractBtn) stepExtractBtn.disabled = false; }, {once:true});
+  video.addEventListener('loadedmetadata', ()=>{ 
+    if(stepExtractBtn) stepExtractBtn.disabled = false; 
+    // automatically switch to the Frame Extraction tab so users can proceed
+    try{ switchTab(2); }catch(e){}
+  }, {once:true});
 });
 
 // Camera flow: open preview and enable recording. Recording will create a blob video which
